@@ -107,8 +107,17 @@ def process_single_scene(
     scene_id: str,
     input_root_dir: str,
     selected_obj_tags: list | None,
-) -> dict | None:
-    """Process a single ScanNet++ scene and return a record dict."""
+) -> dict:
+    """Process a single ScanNet++ scene and return a result dict.
+
+    Returns a dict that always contains 'scene_id' and 'status'.
+    On success, status='ok' and the dict includes all data fields.
+    On skip/error, status='skipped' and 'skip_reason' explains why.
+    """
+    def _skipped(reason: str) -> dict:
+        print(f"[scannetpp] {reason} for scene {scene_id}, skipping.")
+        return {"scene_id": scene_id, "status": "skipped", "skip_reason": reason}
+
     try:
         scene_path = os.path.join(input_root_dir, scene_id)
         base_sensor_path = os.path.join(scene_path, "iphone")
@@ -119,9 +128,16 @@ def process_single_scene(
         mesh_path = os.path.join(scene_path, "scans", "mesh_aligned_0.05.ply")
         anno_path = os.path.join(scene_path, "scans", "segments_anno.json")
 
-        if not os.path.exists(rgb_dir) or not os.path.exists(mesh_path) or not os.path.exists(anno_path):
-            print(f"[scannetpp] Missing data for scene {scene_id}, skipping.")
-            return None
+        # Check required directories / files
+        missing_parts = []
+        if not os.path.exists(rgb_dir):
+            missing_parts.append("rgb_dir")
+        if not os.path.exists(mesh_path):
+            missing_parts.append("mesh_ply")
+        if not os.path.exists(anno_path):
+            missing_parts.append("segments_anno")
+        if missing_parts:
+            return _skipped(f"Missing data ({', '.join(missing_parts)})")
 
         # Mesh & OBB processing
         input_ply = o3d.io.read_triangle_mesh(mesh_path)
@@ -137,52 +153,51 @@ def process_single_scene(
                 params = get_obb_from_annotation(obj["obb"])
                 obj_obbs.append(params)
 
-        # Frame processing
+        # Frame processing — check all files before appending to avoid length mismatch
         rgb_files = sorted(glob.glob(os.path.join(rgb_dir, "*0.jpg")))
         if not rgb_files:
-            return None
+            return _skipped("No RGB keyframes (*0.jpg)")
 
         ids, images, poses, intrinsics, depth_maps = [], [], [], [], []
+        skipped_frames = 0
         for rgb_file in rgb_files:
             abs_rgb_path = os.path.abspath(rgb_file)
             frame_name = os.path.splitext(os.path.basename(rgb_file))[0]
             frame_idx_str = frame_name.split("_")[-1]
 
+            expected_depth = os.path.join(depth_dir, f"{frame_name}.png")
+            expected_pose = os.path.join(pose_dir, f"{frame_name}.json")
+            expected_intr = os.path.join(intrinsic_dir, f"{frame_name}.json")
+
+            # Validate all required files exist before appending
+            if not os.path.exists(expected_depth):
+                print(f"[scannetpp] Depth not found for {frame_name} in {scene_id}")
+                skipped_frames += 1
+                continue
+            if not os.path.exists(expected_pose):
+                print(f"[scannetpp] Pose not found for {frame_name} in {scene_id}")
+                skipped_frames += 1
+                continue
+            if not os.path.exists(expected_intr):
+                print(f"[scannetpp] Intrinsic not found for {frame_name} in {scene_id}")
+                skipped_frames += 1
+                continue
+
             ids.append(frame_idx_str)
             images.append(abs_rgb_path)
+            depth_maps.append(os.path.abspath(expected_depth))
+            poses.append(json_to_4x4_txt(expected_pose))
+            intrinsics.append(json_to_4x4_txt(expected_intr))
 
-            expected_depth = os.path.join(depth_dir, f"{frame_name}.png")
-            if os.path.exists(expected_depth):
-                depth_maps.append(os.path.abspath(expected_depth))
-            else:
-                print(f"[scannetpp] Depth not found for {frame_name} in {scene_id}")
-                continue
+        if len(images) == 0:
+            return _skipped(f"No valid frames (all {len(rgb_files)} keyframes missing depth/pose/intrinsic)")
 
-            expected_pose = os.path.join(pose_dir, f"{frame_name}.json")
-            if os.path.exists(expected_pose):
-                poses.append(json_to_4x4_txt(expected_pose))
-            else:
-                print(f"[scannetpp] Pose not found for {frame_name} in {scene_id}")
-                continue
+        if skipped_frames > 0:
+            print(f"[scannetpp] Scene {scene_id}: kept {len(images)}/{len(rgb_files)} frames, skipped {skipped_frames}")
 
-            expected_intr = os.path.join(intrinsic_dir, f"{frame_name}.json")
-            if os.path.exists(expected_intr):
-                intrinsics.append(json_to_4x4_txt(expected_intr))
-            else:
-                print(f"[scannetpp] Intrinsic not found for {frame_name} in {scene_id}")
-                continue
-
-        if (
-            len(images) == 0
-            or len(poses) != len(images)
-            or len(intrinsics) != len(images)
-            or len(depth_maps) != len(images)
-        ):
-            print(f"[scannetpp] Incomplete data for scene {scene_id}, skipping.")
-            return None
-
-        return {
+        result = {
             "scene_id": scene_id,
+            "status": "ok",
             "id": ids,
             "image": images,
             "pose": poses,
@@ -194,9 +209,10 @@ def process_single_scene(
             "depth_scale": 1000,
             "is_metric_depth": True,
         }
+        return result
     except Exception as e:
         print(f"[scannetpp] Error processing {scene_id}: {e}")
-        return None
+        return {"scene_id": scene_id, "status": "skipped", "skip_reason": f"Exception: {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +246,7 @@ def generate_parquet(
                     selected_obj_tags.append(tag)
 
     all_results = []
+    skipped_scenes = []   # list of {scene_id, skip_reason}
     chunk_count = 0
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -240,8 +257,17 @@ def generate_parquet(
 
         for future in tqdm(as_completed(futures), total=len(futures), desc="parquet"):
             result = future.result()
-            if result:
-                all_results.append(result)
+            if result is None or result.get("status") == "skipped":
+                if result is not None:
+                    skipped_scenes.append({
+                        "scene_id": result["scene_id"],
+                        "skip_reason": result.get("skip_reason", "unknown"),
+                    })
+                continue
+
+            # Remove internal status field before saving
+            result.pop("status", None)
+            all_results.append(result)
 
             if len(all_results) >= chunk_size:
                 save_path = os.path.join(output_dir, f"batch_{chunk_count}.parquet")
@@ -253,9 +279,34 @@ def generate_parquet(
         save_path = os.path.join(output_dir, f"batch_{chunk_count}.parquet")
         pd.DataFrame(all_results).to_parquet(save_path, engine="pyarrow")
 
-    
+    # ---- Summary statistics ----
+    total_scenes = len(scene_folders)
+    saved_scenes = total_scenes - len(skipped_scenes)
+    print("\n" + "=" * 60)
+    print("  ScanNet++ Preprocessing Summary")
+    print("=" * 60)
+    print(f"  Total scenes discovered : {total_scenes}")
+    print(f"  Successfully saved      : {saved_scenes}")
+    print(f"  Skipped                 : {len(skipped_scenes)}")
 
-    print(f"Done. Generated {chunk_count + 1} Parquet file(s).")
+    if skipped_scenes:
+        # Group by skip reason
+        from collections import Counter
+        reason_counts = Counter(s["skip_reason"] for s in skipped_scenes)
+        print(f"\n  Skip reasons breakdown:")
+        for reason, count in reason_counts.most_common():
+            print(f"    - {reason}: {count} scene(s)")
+
+        # List individual skipped scenes (cap at 50 to avoid flooding)
+        print(f"\n  Skipped scene IDs (showing up to 50):")
+        for entry in skipped_scenes[:50]:
+            print(f"    {entry['scene_id']:30s}  reason: {entry['skip_reason']}")
+        if len(skipped_scenes) > 50:
+            print(f"    ... and {len(skipped_scenes) - 50} more")
+
+    print("=" * 60)
+    print(f"  Generated {chunk_count + 1} Parquet file(s) in {output_dir}")
+    print("=" * 60 + "\n")
 
 
 # ---------------------------------------------------------------------------
