@@ -48,6 +48,41 @@ The **OpenSpatial-3M** dataset is now available on Hugging Face. It contains 3 m
 | [Quick Start](assets/quick_start.md) | Data preparation, config structure, annotation pipeline usage, and running tasks end-to-end |
 | [Development Guide](assets/development_guide.md) | Adding new annotation tasks, pipeline stages, prompt templates, dataset preprocessors, and internal architecture reference |
 
+## 🗺️ Cognitive Map & Benchmark-Style Tasks
+
+OpenSpatial optionally attaches a **question-related cognitive map** to every
+generated QA. A cognitive map is a 10×10 bird's-eye-view grid recording the
+cameras (position + yaw) and objects (position + size + yaw) that participate
+in the QA, plus a PNG visualization with the question/answer overlay.
+
+Enable it per task by adding the following block to any `config/annotation/*.yaml`:
+
+```yaml
+cognitive_map:
+  enable: true               # turn the feature on (off by default for back-compat)
+  enable_visualization: true # render PNGs alongside the JSON map
+  dump_samples: true         # dump the first N PNGs to output_dir/cognitive_map_samples/
+  dump_sample_count: 20
+  grid_size: 10
+  padding_ratio: 0.10
+```
+
+The following benchmark-style multiview tasks are available out of the box
+(see their dedicated demo YAMLs under `config/annotation/`):
+
+| Task | Benchmark style | YAML |
+|---|---|---|
+| Relative Distance | all-angles | `demo_multiview_relative_distance.yaml` |
+| Clockwise (Yes/No) | BLINK | `demo_multiview_clockwise.yaml` |
+| Camera Movement Direction | VSI-Bench | `demo_multiview_camera_movement.yaml` |
+| Camera–Camera | MMSI-Bench | `demo_mmsi_camera_camera.yaml` |
+| Camera–Object | MMSI-Bench | `demo_mmsi_camera_object.yaml` |
+| Object–Object (world-frame) | MMSI-Bench | `demo_mmsi_object_object.yaml` |
+| Camera Motion (composite) | MMSI-Bench | `demo_mmsi_camera_motion.yaml` |
+| BEV Pose Estimation | all-angles | `demo_multiview_bev_pose_estimation.yaml` |
+| Manipulation Viewpoint | all-angles (approx.) | `demo_multiview_manipulation_view.yaml` |
+
+
 ## 📅 Roadmap & To-Do List
 
 - [x] **3D Data Engine**: Open-source the core 3D spatial understanding data engine.

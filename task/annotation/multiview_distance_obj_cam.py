@@ -80,7 +80,7 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
 
         Returns:
             (meta_data, True) or (None, False).
-            meta_data keys: image, mask, tag, view_idx, pointcloud, bbox_2d.
+            meta_data keys: image, mask, tag, view_idx, pointcloud, bbox_2d, node_ids.
         """
         node, views = self._find_overlapping_views(graph, num_views=2)
         if node is None:
@@ -101,6 +101,7 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
             "view_idx": [v1, v2],
             "pointcloud": [app1.pointcloud_camera, app2.pointcloud_camera],
             "bbox_2d": [app1.bbox_2d, app2.bbox_2d],
+            "node_ids": [node.node_id],
         }
         return meta, True
 
@@ -120,4 +121,5 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
         mark_type = self.marker.choose_mark_type()
         processed_images, objs = self._mark_per_view(meta, mark_type)
         prompt = self.obj_cam_distance_prompt_func(objs[0], objs[1])
-        return prompt, processed_images, QuestionType.MCQ
+        cog_ctx = self._collect_cog_context_from_meta(meta)
+        return prompt, processed_images, QuestionType.MCQ, cog_ctx

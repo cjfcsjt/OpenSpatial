@@ -119,7 +119,8 @@ class AnnotationGenerator(BaseAnnotationTask):
             sampled, image, self.height_comparison_prompt_func,
             mark_prob=0.8, prompt_args=prompt_args,
         )
-        return prompt, processed_image, qtype
+        cog_ctx = self._make_singleview_cog_context(graph, sampled)
+        return prompt, processed_image, qtype, cog_ctx
 
     def _generate_proximity(self, graph):
         """Classify all object pairs into "next" / "far" by size-relative
@@ -168,13 +169,15 @@ class AnnotationGenerator(BaseAnnotationTask):
                 pair, image, self.proximity_prompt_func,
                 mark_prob=0.5, prompt_args={"next_or_far": "next"}
             )
-            results.append((prompt, img, QuestionType.MCQ))
+            cog_ctx = self._make_singleview_cog_context(graph, list(pair))
+            results.append((prompt, img, QuestionType.MCQ, cog_ctx))
         if far_candidates:
             pair = random.choice(far_candidates)
             prompt, img = self.mark_and_prompt(
                 pair, image, self.proximity_prompt_func,
                 mark_prob=0.5, prompt_args={"next_or_far": "far"}
             )
-            results.append((prompt, img, QuestionType.MCQ))
+            cog_ctx = self._make_singleview_cog_context(graph, list(pair))
+            results.append((prompt, img, QuestionType.MCQ, cog_ctx))
 
         return results

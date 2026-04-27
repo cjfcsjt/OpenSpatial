@@ -90,7 +90,9 @@ class AnnotationGenerator(BaseAnnotationTask):
         tag = random.choice(list(tag_counts.keys()))
         prompt = self.count_oe_prompt_func(tag, tag_counts[tag])
         image_bytes = {"bytes": convert_pil_to_bytes(graph.primary_view.image)}
-        return prompt, image_bytes, QuestionType.OPEN_ENDED
+        nodes = [n for n in graph.get_object_nodes() if n.tag == tag]
+        cog_ctx = self._make_singleview_cog_context(graph, nodes)
+        return prompt, image_bytes, QuestionType.OPEN_ENDED, cog_ctx
 
     def _generate_count_mcq(self, graph):
         """Pick a random duplicate tag and ask how many (MCQ)."""
@@ -102,4 +104,6 @@ class AnnotationGenerator(BaseAnnotationTask):
         if prompt is None:
             return None
         image_bytes = {"bytes": convert_pil_to_bytes(graph.primary_view.image)}
-        return prompt, image_bytes, QuestionType.MCQ
+        nodes = [n for n in graph.get_object_nodes() if n.tag == tag]
+        cog_ctx = self._make_singleview_cog_context(graph, nodes)
+        return prompt, image_bytes, QuestionType.MCQ, cog_ctx

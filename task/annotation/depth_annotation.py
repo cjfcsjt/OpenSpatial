@@ -312,7 +312,7 @@ class AnnotationGenerator(BaseAnnotationTask):
     def _dispatch(self, graph, task_kind, qtype):
         """Shared handler logic: prepare graph → build prompt → return result.
 
-        Returns (prompt, image_bytes, QuestionType) or None.
+        Returns (prompt, image_bytes, QuestionType, cog_ctx) or None.
         """
         prepared = self._prepare(graph)
         if prepared is None:
@@ -322,7 +322,8 @@ class AnnotationGenerator(BaseAnnotationTask):
         prompt, image_bytes = builder(depth_map, image, nodes, qtype)
         if prompt is None:
             return None
-        return prompt, image_bytes, qtype
+        cog_ctx = self._make_singleview_cog_context(graph, nodes)
+        return prompt, image_bytes, qtype, cog_ctx
 
     def _generate_depth_ordering_oe(self, graph):
         return self._dispatch(graph, "ordering", QuestionType.OPEN_ENDED)

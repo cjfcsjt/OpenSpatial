@@ -13,6 +13,7 @@ import open3d as o3d
 from .base_annotation_task import BaseAnnotationTask
 from .scene_graph import SceneGraph
 from .message_builder import create_multiview_messages
+from .cognitive_map import CognitiveMapContext
 
 from utils.projection_utils import backproject_depth_to_3d, project_points_3d_to_2d, transform_points_camera_to_world
 
@@ -363,3 +364,89 @@ class BaseMultiviewAnnotationTask(BaseAnnotationTask):
                 meta["box_3d_world"].append(node.box_3d_world)
 
         return meta
+
+    # ─── Cognitive Map Context Helpers ───────────────────────────────────
+
+    def _collect_cog_context_from_meta(self, meta, anchor_node_id=None,
+                                       extra_view_indices=None,
+                                       extra_node_ids=None):
+        """Build a CognitiveMapContext from a standard meta dict.
+
+        The meta dict produced by `_build_view_meta` and task-specific finders
+        typically carries ``view_idx`` (list of ints) and either ``box_3d_world``
+        plus ``tag`` lists, or nested ``anchor_*`` fields. This helper is
+        permissive and best-effort: it silently skips missing pieces.
+
+        Args:
+            meta: dict from `_find_*` / `_build_view_meta`.
+            anchor_node_id: optional anchor to highlight.
+            extra_view_indices: additional view indices to include.
+            extra_node_ids: additional node ids to include.
+
+        Returns:
+            CognitiveMapContext, or None when nothing usable is present.
+        """
+        view_indices = []
+        if meta:
+            views = meta.get("view_idx")
+            if isinstance(views, (list, tuple)):
+                view_indices.extend(int(v) for v in views if v is not None)
+            elif isinstance(views, int):
+                view_indices.append(int(views))
+        if extra_view_indices:
+            view_indices.extend(int(v) for v in extra_view_indices if v is not None)
+
+        node_ids = []
+        if meta:
+            nid_list = meta.get("node_ids")
+            if isinstance(nid_list, (list, tuple)):
+                node_ids.extend(str(n) for n in nid_list if n is not None)
+            # Fall back to box_3d_world stringification (matches multiview
+            # node_id convention from SceneGraph.from_multiview_example).
+            box_list = meta.get("box_3d_world")
+            if isinstance(box_list, (list, tuple)) and not nid_list:
+                node_ids.extend(str(b) for b in box_list if b is not None)
+            anchor_box = meta.get("anchor_box_3d_world")
+            if anchor_box is not None and anchor_node_id is None:
+                anchor_node_id = str(anchor_box)
+                node_ids.append(anchor_node_id)
+        if extra_node_ids:
+            node_ids.extend(str(n) for n in extra_node_ids if n is not None)
+
+        # Dedup while preserving order.
+        def _dedup(seq):
+            seen = set()
+            out = []
+            for x in seq:
+                if x not in seen:
+                    seen.add(x)
+                    out.append(x)
+            return out
+
+        view_indices = _dedup(view_indices)
+        node_ids = _dedup(node_ids)
+
+        if not view_indices and not node_ids:
+            return None
+        return CognitiveMapContext(
+            view_indices=view_indices,
+            node_ids=node_ids,
+            anchor_node_id=(str(anchor_node_id) if anchor_node_id is not None else None),
+        )
+
+    def _make_cog_context(self, view_indices=None, node_ids=None,
+                          anchor_node_id=None):
+        """Build a CognitiveMapContext directly from view/node lists.
+
+        Convenience shortcut for tasks that do not use the standard ``meta``
+        dict conventions (e.g. camera-only tasks).
+        """
+        view_indices = list(view_indices) if view_indices else []
+        node_ids = list(node_ids) if node_ids else []
+        if not view_indices and not node_ids:
+            return None
+        return CognitiveMapContext(
+            view_indices=[int(v) for v in view_indices if v is not None],
+            node_ids=[str(n) for n in node_ids if n is not None],
+            anchor_node_id=(str(anchor_node_id) if anchor_node_id is not None else None),
+        )

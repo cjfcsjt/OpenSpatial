@@ -226,7 +226,8 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
         if prompt is None:
             return None
 
-        return prompt, [processed_image1, processed_image2]
+        cog_ctx = self._collect_cog_context_from_meta(meta)
+        return prompt, [processed_image1, processed_image2], cog_ctx
 
     # ─── Handlers (dispatched by SUB_TASKS) ───────────────────────────
 
@@ -234,12 +235,12 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
         result = self._build_pair_position_prompt(graph, question_type=QuestionType.OPEN_ENDED)
         if result is None:
             return None
-        prompt, processed_images = result
-        return prompt, processed_images, QuestionType.OPEN_ENDED
+        prompt, processed_images, cog_ctx = result
+        return prompt, processed_images, QuestionType.OPEN_ENDED, cog_ctx
 
     def _generate_position_mcq(self, graph):
         result = self._build_pair_position_prompt(graph, question_type=QuestionType.MCQ)
         if result is None:
             return None
-        prompt, processed_images = result
-        return prompt, processed_images, QuestionType.MCQ
+        prompt, processed_images, cog_ctx = result
+        return prompt, processed_images, QuestionType.MCQ, cog_ctx

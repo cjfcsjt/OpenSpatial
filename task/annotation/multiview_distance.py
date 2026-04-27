@@ -75,7 +75,8 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
             return None
         meta, processed_images, objs = result
         prompt = self.pair_absolute_distance_prompt_func(objs[0], objs[1])
-        return prompt, processed_images, QuestionType.OPEN_ENDED
+        cog_ctx = self._collect_cog_context_from_meta(meta)
+        return prompt, processed_images, QuestionType.OPEN_ENDED, cog_ctx
 
     def _generate_multi_relative_distance(self, graph):
         result = self._find_chain_and_mark(graph, num_views=random.choice([3, 4, 5, 6]))
@@ -83,4 +84,5 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
             return None
         meta, processed_images, objs = result
         prompt = self.multi_relative_distance_prompt_func(objs)
-        return prompt, processed_images, QuestionType.OPEN_ENDED
+        cog_ctx = self._collect_cog_context_from_meta(meta)
+        return prompt, processed_images, QuestionType.OPEN_ENDED, cog_ctx

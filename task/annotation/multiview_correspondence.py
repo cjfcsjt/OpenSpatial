@@ -265,7 +265,8 @@ class AnnotationGenerator(BaseMultiviewAnnotationTask):
         prompt = self.point_correspondence_prompt_func(color1, color2, gt_answer, question_type)
         qtype = QuestionType.MCQ if question_type == QuestionType.MCQ else QuestionType.OPEN_ENDED
 
-        return prompt, [img1, img2], qtype
+        cog_ctx = self._make_cog_context(view_indices=meta["view_idx"])
+        return prompt, [img1, img2], qtype, cog_ctx
 
     def _generate_point_correspondence_oe(self, graph):
         """Generate an open-ended point correspondence QA."""

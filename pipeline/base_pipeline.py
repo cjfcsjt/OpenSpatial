@@ -180,6 +180,16 @@ class BasePipeline:
             print(f">>> Running Task [{i+1}/{len(self.task_queue)}]: {task_name}...")
             processed_data = task.run(copy.deepcopy(self.dataset.data))
             self.save_task_data(stage_name, task_name, task_cfg, processed_data, task_info["rel_output_dir"])
+            # Cognitive-map rendering failure-rate warning (best-effort).
+            total = getattr(task, "_cog_total_count", 0)
+            fail = getattr(task, "_cog_fail_count", 0)
+            if total > 0:
+                rate = fail / float(total)
+                print(f">>> Cognitive-map render: {total - fail}/{total} "
+                      f"succeeded ({rate * 100:.1f}% failure).")
+                if rate > 0.1:
+                    print(">>> [WARN] Cognitive-map render failure rate > 10%. "
+                          "Check matplotlib backend / font availability.")
 
         print(">>> Pipeline Finished.")
 

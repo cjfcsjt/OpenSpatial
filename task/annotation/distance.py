@@ -138,13 +138,14 @@ class AnnotationGenerator(BaseAnnotationTask):
         prompt, processed_image = self.mark_and_prompt(
             sampled, image, self.absolute_distance_prompt_func, mark_prob=1.0
         )
-        return prompt, processed_image, QuestionType.OPEN_ENDED
+        cog_ctx = self._make_singleview_cog_context(graph, sampled)
+        return prompt, processed_image, QuestionType.OPEN_ENDED, cog_ctx
 
     def _generate_relative_distance(self, graph):
         """Sample three objects and ask relative distance to the third.
 
         Generates both an OE and an MCQ prompt from the same triple.
-        Returns list[(prompt, image, qtype)] with correct types per prompt.
+        Returns list[(prompt, image, qtype, cog_ctx)] with correct types per prompt.
         """
         nodes = graph.get_object_nodes()
         if len(graph.obj_tags) <= 2:
@@ -155,8 +156,9 @@ class AnnotationGenerator(BaseAnnotationTask):
         # mark all three objects at once
         processed_image, marked = self.marker.mark_objects(image, sampled)
         A, B, C = marked
+        cog_ctx = self._make_singleview_cog_context(graph, sampled)
 
         return [
-            (self.relative_distance_oe_prompt_func(A, B, C), processed_image, QuestionType.OPEN_ENDED),
-            (self.relative_distance_mcq_prompt_func(A, B, C), processed_image, QuestionType.MCQ),
+            (self.relative_distance_oe_prompt_func(A, B, C), processed_image, QuestionType.OPEN_ENDED, cog_ctx),
+            (self.relative_distance_mcq_prompt_func(A, B, C), processed_image, QuestionType.MCQ, cog_ctx),
         ]

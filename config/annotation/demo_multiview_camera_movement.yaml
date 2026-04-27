@@ -1,0 +1,30 @@
+dataset:
+  modality: image
+  dataset_name: image_base
+  data_dir: /path/to/multiview_processed.parquet
+
+pipeline:
+  file_name: base_pipeline
+  class_name: BasePipeline
+
+  stages:
+    annotation_stage:
+      -
+        file_name: multiview_camera_movement
+        method: AnnotationGenerator
+        scaling_factor: 1
+        filter_tags: ["ceiling", "floor", "wall", "object"]
+        sub_tasks:
+          camera_movement_mcq: 1
+        max_num_views: 400
+        min_rot_angle: 0.0
+        min_translation: 0.0
+        min_component_m: 0.2
+        use_multi_processing: false
+        num_workers: 8
+        output_dir:
+        cognitive_map:
+          enable: true
+          enable_visualization: true
+          dump_samples: true
+          dump_sample_count: 20

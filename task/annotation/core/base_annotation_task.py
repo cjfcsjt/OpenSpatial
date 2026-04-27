@@ -5,12 +5,19 @@ Extracts the shared run/apply_transform/create_messages patterns
 from all 8 singleview annotation files.
 """
 
+import os
 import threading
 
 from .scene_graph import SceneGraph
 from .visual_marker import VisualMarker, MarkConfig
 from .message_builder import create_singleview_messages
 from .prompt_template import PromptTemplate, TemplateRegistry
+from .cognitive_map import (
+    CognitiveMapBuilder,
+    CognitiveMapContext,
+    CognitiveMapRenderer,
+)
+from .cognitive_map_config import parse_cognitive_map_settings
 
 from task.base_task import BaseTask
 from utils.point_cloud_utils import clean_point_cloud
@@ -42,6 +49,23 @@ class BaseAnnotationTask(BaseTask):
         self.scaling_factor = args.get("scaling_factor", 1)
         self.filter_tags = args.get("filter_tags", None)
         self._sub_tasks_config = self._parse_sub_tasks(args.get("sub_tasks", None))
+
+        # Cognitive map feature (disabled by default for backward compat).
+        self._cog_settings = parse_cognitive_map_settings(args)
+        self._cog_builder = None
+        self._cog_renderer = None
+        self._cog_dump_counter = 0
+        self._cog_fail_count = 0
+        self._cog_total_count = 0
+        if self._cog_settings.active:
+            self._cog_builder = CognitiveMapBuilder(
+                grid_size=self._cog_settings.grid_size,
+                padding_ratio=self._cog_settings.padding_ratio,
+            )
+            if self._cog_settings.enable_visualization:
+                self._cog_renderer = CognitiveMapRenderer()
+        self._cog_output_dir = args.get("output_dir", None)
+        self._cog_dump_lock = threading.Lock()
 
     def _parse_sub_tasks(self, raw):
         """Parse sub_tasks config from YAML.
@@ -164,11 +188,35 @@ class BaseAnnotationTask(BaseTask):
         """Generic sub_task dispatch loop.
 
         Iterates over SUB_TASKS, calls each handler with count from config.
-        Handler signature: _generate_xxx(self, graph) -> (prompt, image, qtype) | list | None
+        Handler signature (preferred): _generate_xxx(self, graph)
+            -> (prompt, image, qtype) | (prompt, image, qtype, cog_ctx)
+            | list of such tuples | None
 
-        Subclasses with special logic can override this method.
+        The 4-tuple form attaches a CognitiveMapContext for the cognitive
+        map feature. Handlers that return 3-tuples remain fully backward
+        compatible.
         """
-        prompts, images, qtypes = [], [], []
+        prompts, images, qtypes, cog_contexts = [], [], [], []
+
+        def _append(item):
+            if not isinstance(item, tuple):
+                raise ValueError(
+                    f"Handler must return a tuple, got {type(item).__name__}"
+                )
+            if len(item) == 3:
+                p, img, qt = item
+                cog = None
+            elif len(item) == 4:
+                p, img, qt, cog = item
+            else:
+                raise ValueError(
+                    f"Handler must return a 3- or 4-tuple, got length {len(item)}"
+                )
+            prompts.append(p)
+            images.append(img)
+            qtypes.append(qt)
+            cog_contexts.append(cog)
+
         for name, meta in self.SUB_TASKS.items():
             count = self.get_sub_task_count(name, default=meta["default"])
             if count == 0:
@@ -179,17 +227,12 @@ class BaseAnnotationTask(BaseTask):
                 if result is None:
                     continue
                 if isinstance(result, list):
-                    for p, img, qt in result:
-                        prompts.append(p)
-                        images.append(img)
-                        qtypes.append(qt)
+                    for sub in result:
+                        _append(sub)
                 else:
-                    p, img, qt = result
-                    prompts.append(p)
-                    images.append(img)
-                    qtypes.append(qt)
+                    _append(result)
         tags = [[self.QUESTION_TAG]] * len(prompts)
-        return prompts, images, tags, qtypes
+        return prompts, images, tags, qtypes, cog_contexts
 
     def get_template(self, name: str) -> PromptTemplate:
         """Get a template from the registry. Subclass can override for customization."""
@@ -221,7 +264,19 @@ class BaseAnnotationTask(BaseTask):
         self.marker = VisualMarker(self.get_mark_config())
 
         graph = self.build_scene_graph(example)
-        prompts, processed_images, question_tags, question_types = self.process(graph, example)
+        process_result = self.process(graph, example)
+
+        # Backward compat: process() may return 4- or 5-tuple.
+        if len(process_result) == 5:
+            prompts, processed_images, question_tags, question_types, cog_contexts = process_result
+        elif len(process_result) == 4:
+            prompts, processed_images, question_tags, question_types = process_result
+            cog_contexts = [None] * len(prompts)
+        else:
+            raise ValueError(
+                f"process() must return 4- or 5-tuple, got length {len(process_result)}"
+            )
+
         if len(prompts) == 0:
             return None, False
 
@@ -231,4 +286,95 @@ class BaseAnnotationTask(BaseTask):
         example["QA_images"] = processed_images
         example["question_tags"] = question_tags
         example["question_types"] = question_types
+
+        # Cognitive map attachment (only when enabled via YAML).
+        if self._cog_settings.active:
+            self._attach_cognitive_maps(example, graph, prompts, cog_contexts,
+                                        question_tags)
         return example, True
+
+    # ─── Cognitive Map Hooks ─────────────────────────────────────────────
+
+    def _make_singleview_cog_context(self, graph, nodes=None, anchor_node_id=None):
+        """Build a CognitiveMapContext from a singleview graph + object nodes.
+
+        Helper used by singleview handlers to attach the standard context.
+        """
+        view_indices = list(graph.views.keys()) if hasattr(graph, "views") else [0]
+        if nodes is None:
+            node_ids = [n.node_id for n in graph.get_object_nodes()]
+        else:
+            node_ids = [n.node_id for n in nodes if n is not None]
+        if not view_indices and not node_ids:
+            return None
+        return CognitiveMapContext(
+            view_indices=view_indices,
+            node_ids=node_ids,
+            anchor_node_id=anchor_node_id,
+        )
+
+    def _attach_cognitive_maps(self, example, graph, prompts, cog_contexts,
+                               question_tags):
+        """Build cognitive maps for each generated QA and attach to example."""
+        maps = []
+        images = []
+        for i, prompt in enumerate(prompts):
+            ctx = cog_contexts[i] if i < len(cog_contexts) else None
+            cmap = None
+            cmap_img = None
+            if ctx is not None and self._cog_builder is not None:
+                try:
+                    cmap = self._cog_builder.build(graph, ctx)
+                except Exception:
+                    cmap = None
+            if cmap is not None and self._cog_renderer is not None:
+                q_text, a_text = self._split_question_answer(prompt)
+                try:
+                    cmap_img = self._cog_renderer.render(cmap, q_text, a_text)
+                except Exception:
+                    cmap_img = None
+                with self._cog_dump_lock:
+                    self._cog_total_count += 1
+                    if cmap_img is None:
+                        self._cog_fail_count += 1
+                if cmap_img is not None and self._cog_settings.dump_samples:
+                    tag = question_tags[i][0] if (i < len(question_tags)
+                                                  and question_tags[i]) else "tag"
+                    self._maybe_dump_sample(cmap_img, tag)
+            maps.append(cmap)
+            images.append(cmap_img)
+        example["cognitive_maps"] = maps
+        example["cognitive_map_images"] = images
+
+    @staticmethod
+    def _split_question_answer(prompt):
+        """Split a 'question Answer: answer' prompt into its halves."""
+        if not isinstance(prompt, str):
+            return "", ""
+        marker = "Answer:"
+        if marker in prompt:
+            q, _, a = prompt.partition(marker)
+            return q.strip(), a.strip()
+        return prompt.strip(), ""
+
+    def _maybe_dump_sample(self, png_bytes, tag):
+        """Dump the first N PNGs to disk for quick inspection (best-effort)."""
+        with self._cog_dump_lock:
+            if self._cog_dump_counter >= self._cog_settings.dump_sample_count:
+                return
+            idx = self._cog_dump_counter
+            self._cog_dump_counter += 1
+        try:
+            if not self._cog_output_dir:
+                return
+            out_dir = os.path.join(self._cog_output_dir,
+                                   "cognitive_map_samples")
+            os.makedirs(out_dir, exist_ok=True)
+            safe_tag = "".join(c if c.isalnum() or c in "_-" else "_"
+                               for c in str(tag))
+            out_path = os.path.join(out_dir, f"{idx:04d}_{safe_tag}.png")
+            with open(out_path, "wb") as f:
+                f.write(png_bytes)
+        except Exception:
+            # Sample dumping is best-effort; never break the pipeline.
+            pass

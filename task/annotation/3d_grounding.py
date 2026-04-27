@@ -119,4 +119,6 @@ class ThreeDGroundingGenerator(BaseAnnotationTask):
         sampled_tags = random.sample(unique_tags, random.randint(1, min(3, len(unique_tags))))
 
         prompt = self.grounding_oe_prompt_func(sampled_tags, tags_to_boxes)
-        return prompt, {"bytes": convert_pil_to_bytes(view.image)}, QuestionType.OPEN_ENDED
+        sampled_nodes = [n for n in nodes if n.tag in sampled_tags]
+        cog_ctx = self._make_singleview_cog_context(graph, sampled_nodes)
+        return prompt, {"bytes": convert_pil_to_bytes(view.image)}, QuestionType.OPEN_ENDED, cog_ctx

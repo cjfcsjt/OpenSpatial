@@ -129,7 +129,7 @@ class AnnotationGenerator(BaseAnnotationTask):
                 lambda n: n.box_3d_world[5],
             ))
 
-        return prompts, processed_image, QuestionType.OPEN_ENDED
+        return prompts, processed_image, QuestionType.OPEN_ENDED, self._make_singleview_cog_context(graph, sampled)
 
     def _generate_relative_size(self, graph):
         """Compare the volume of two objects and ask which is bigger/smaller.
@@ -145,4 +145,5 @@ class AnnotationGenerator(BaseAnnotationTask):
         prompt, processed_image = self.mark_and_prompt(
             sampled, image, self.relative_size_prompt_func, mark_prob=0.7
         )
-        return prompt, processed_image, QuestionType.OPEN_ENDED
+        cog_ctx = self._make_singleview_cog_context(graph, sampled)
+        return prompt, processed_image, QuestionType.OPEN_ENDED, cog_ctx
