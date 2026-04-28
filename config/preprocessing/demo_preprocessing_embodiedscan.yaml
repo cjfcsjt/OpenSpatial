@@ -2,6 +2,10 @@ dataset:
   modality: image
   dataset_name:  image_base
   data_dir: "Path to embodied scan dataset parquet file, e.g., /pfs/jianhuiliu/tmp/embodiedscan_sample.parquet"
+  # Root of the raw EmbodiedScan dataset (contains scannet/, 3rscan/, etc.).
+  # Used to resolve relative path fields (image/depth_map/intrinsic/pose/axis_align_matrix)
+  # stored in the parquet by the `embodiedscan_data extract` step.
+  data_root: "Path to EmbodiedScan data root, e.g., /path/to/EmbodiedScan/data"
 
 pipeline: 
   file_name: base_pipeline

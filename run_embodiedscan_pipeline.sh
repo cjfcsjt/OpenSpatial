@@ -321,15 +321,21 @@ fi
 
 # ==================== yaml render tool ======================================
 render_cfg() {
-    python - "$1" "$2" "$3" <<'PY'
+    # Args: src dst data_dir [data_root]
+    #   - data_dir:   dataset.data_dir value (string or python-literal list)
+    #   - data_root:  optional dataset.data_root (absolute path to raw dataset root)
+    local data_root_arg="${4:-}"
+    python - "$1" "$2" "$3" "${data_root_arg}" <<'PY'
 import sys, yaml, pathlib, ast
-src, dst, data_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+src, dst, data_dir, data_root = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 cfg = yaml.safe_load(pathlib.Path(src).read_text())
 try:
     parsed = ast.literal_eval(data_dir)
     cfg["dataset"]["data_dir"] = parsed
 except Exception:
     cfg["dataset"]["data_dir"] = data_dir
+if data_root:
+    cfg["dataset"]["data_root"] = data_root
 pathlib.Path(dst).write_text(yaml.safe_dump(cfg, sort_keys=False))
 PY
 }
@@ -342,7 +348,7 @@ if [[ "$START_STEP" -le 4 ]]; then
 
     # Build list of per-image parquets as data_dir
     RAW_LIST_REPR="[$(printf '"%s",' "${PER_IMAGE_PARQUETS[@]}")]"
-    render_cfg "${STEP4_CFG_SRC}" "${STEP4_CFG}" "${RAW_LIST_REPR}"
+    render_cfg "${STEP4_CFG_SRC}" "${STEP4_CFG}" "${RAW_LIST_REPR}" "${EMBODIEDSCAN_DATA}"
     ok "rendered ${STEP4_CFG}"
 
     if [[ -f "${STEP4_DONE}" ]]; then
@@ -382,7 +388,7 @@ run_annot() {
     local src="${PROJECT_ROOT}/config/annotation/${cfg_name}.yaml"
     local dst="${TMP_CFG_DIR}/${cfg_name}.yaml"
     need_file "${src}"
-    render_cfg "${src}" "${dst}" "${data_dir}"
+    render_cfg "${src}" "${dst}" "${data_dir}" "${EMBODIEDSCAN_DATA}"
     log "  ↳ ${cfg_name}"
     python run.py --config "${dst}" --output_dir "${ANNOT_OUT_DIR}" \
         2>&1 | tee "${LOG_DIR}/step5_${cfg_name}.log"
