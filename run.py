@@ -1,6 +1,8 @@
 import argparse
 import copy
+import multiprocessing
 import os
+import traceback
 from types import SimpleNamespace
 
 import yaml
@@ -112,6 +114,9 @@ def get_config():
     parser = argparse.ArgumentParser(description="Pipeline runner")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config file")
     parser.add_argument("--output_dir", type=str, required=True, help="Output directory for results")
+    parser.add_argument("--parallel_workers", type=int, default=1,
+                        help="Number of parallel workers for processing multiple parquet files. "
+                             "Default 1 (sequential). Set >1 to enable multiprocessing.Pool.")
     args = parser.parse_args()
 
     config_dict = _load_yaml_config(args.config)
@@ -160,6 +165,33 @@ def _run_single_pipeline(config):
     return True
 
 
+def _run_single_pipeline_worker(task_args):
+    """Worker function for multiprocessing.Pool.
+
+    Args:
+        task_args: tuple of (index, total, data_dir, config)
+
+    Returns:
+        (index, success, error_msg)
+    """
+    idx, total, data_dir, config = task_args
+    config_copy = copy.deepcopy(config)
+    config_copy.dataset.data_dir = data_dir
+    config_copy.output_dir = os.path.join(config.output_dir, f"part_{idx + 1}")
+    print(f">>>>>>Running datafile [{idx + 1}/{total}]: {data_dir}")
+    try:
+        success = _run_single_pipeline(config_copy)
+        if success:
+            print(f">>>>>>Finished datafile [{idx + 1}/{total}]: {data_dir}")
+        else:
+            print(f">>>>>>Failed datafile [{idx + 1}/{total}]: {data_dir} (pipeline returned None)")
+        return (idx, success, None)
+    except Exception as e:
+        error_msg = traceback.format_exc()
+        print(f">>>>>>Error datafile [{idx + 1}/{total}]: {data_dir}\n{error_msg}")
+        return (idx, False, error_msg)
+
+
 def main(args, config):
     """Entry point for executing pipeline on single or multiple input parquet files."""
     if not isinstance(config.dataset.data_dir, list):
@@ -169,13 +201,42 @@ def main(args, config):
     data_dirs = config.dataset.data_dir
     _check_parquet_file(data_dirs)
 
-    for i, data_dir in enumerate(data_dirs):
-        config_copy = copy.deepcopy(config)
-        config_copy.dataset.data_dir = data_dir
-        config_copy.output_dir = os.path.join(config.output_dir, f"part_{i+1}")
-        print(f">>>>>>Running datafile [{i+1}/{len(data_dirs)}]: {data_dir}")
-        if not _run_single_pipeline(config_copy):
-            return
+    parallel_workers = getattr(args, "parallel_workers", 1)
+    total = len(data_dirs)
+
+    if parallel_workers <= 1:
+        # Sequential execution (original behavior)
+        for i, data_dir in enumerate(data_dirs):
+            config_copy = copy.deepcopy(config)
+            config_copy.dataset.data_dir = data_dir
+            config_copy.output_dir = os.path.join(config.output_dir, f"part_{i+1}")
+            print(f">>>>>>Running datafile [{i+1}/{total}]: {data_dir}")
+            if not _run_single_pipeline(config_copy):
+                return
+    else:
+        # Parallel execution with multiprocessing.Pool
+        num_workers = min(parallel_workers, total)
+        print(f">>>>>>Parallel mode: {num_workers} workers for {total} parquet files")
+
+        task_args_list = [
+            (i, total, data_dir, config)
+            for i, data_dir in enumerate(data_dirs)
+        ]
+
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(processes=num_workers) as pool:
+            results = pool.map(_run_single_pipeline_worker, task_args_list)
+
+        # Report results
+        failed = [(idx, err) for idx, success, err in results if not success]
+        succeeded = sum(1 for _, success, _ in results if success)
+        print(f">>>>>>Parallel execution complete: {succeeded}/{total} succeeded")
+        if failed:
+            print(f">>>>>>Failed parquet files:")
+            for idx, err in failed:
+                print(f"  part_{idx + 1}: {data_dirs[idx]}")
+                if err:
+                    print(f"    Error: {err.splitlines()[-1]}")
 
 
 if __name__ == "__main__":
