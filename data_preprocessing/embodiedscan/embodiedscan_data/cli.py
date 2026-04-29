@@ -16,6 +16,7 @@ def cmd_extract(args):
             output_dir=args.output,
             workers=args.workers,
             max_scenes=args.max_scenes,
+            max_tasks=args.max_tasks,
         )
 
 
@@ -84,7 +85,9 @@ def main():
     p_extract.add_argument("--data-root", required=True, help="Root data directory")
     p_extract.add_argument("--output", required=True, help="Output directory")
     p_extract.add_argument("--workers", type=int, default=24)
-    p_extract.add_argument("--max-scenes", type=int, default=None, help="Limit scenes (for testing)")
+    p_extract.add_argument("--max-scenes", type=int, default=None, help="Limit number of scenes (for testing)")
+    p_extract.add_argument("--max-tasks", type=int, default=None,
+                           help="Hard-cap on total (scene, camera) tasks (for smoke testing)")
     p_extract.set_defaults(func=cmd_extract)
 
     # merge
