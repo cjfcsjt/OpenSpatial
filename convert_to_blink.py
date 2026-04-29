@@ -38,8 +38,24 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from PIL import Image as PILImage
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that converts numpy types to native Python types."""
+
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        return super().default(obj)
 
 
 # ─── Image Extraction ────────────────────────────────────────────────────────
@@ -251,7 +267,28 @@ def convert_parquet_to_blink(parquet_path, output_dir, data_source="OpenSpatial"
             question_tags = row.get("question_tags", [])
             question_types = row.get("question_types", "")
 
+            # Extract cognitive maps (MindCube format dicts, one per QA).
+            # The parquet stores a list; for single-QA rows we take the first.
+            cognitive_maps_raw = row.get("cognitive_maps")
+            cognitive_map = None
+            if cognitive_maps_raw is not None:
+                if isinstance(cognitive_maps_raw, (list, tuple)):
+                    # Take the first non-None map.
+                    for cm in cognitive_maps_raw:
+                        if cm is not None:
+                            cognitive_map = cm
+                            break
+                elif isinstance(cognitive_maps_raw, dict):
+                    cognitive_map = cognitive_maps_raw
+
             # Build BLINK record
+            others_dict = {
+                "question_tags": question_tags,
+                "question_types": question_types,
+            }
+            if cognitive_map is not None:
+                others_dict["cognitive_map"] = cognitive_map
+
             record = {
                 "id": f"{data_source}_{task_name}_{idx:06d}",
                 "image": image_paths,
@@ -262,10 +299,7 @@ def convert_parquet_to_blink(parquet_path, output_dir, data_source="OpenSpatial"
                 "output_type": output_type,
                 "data_source": data_source,
                 "sub_task": task_type,
-                "others": {
-                    "question_tags": question_tags,
-                    "question_types": question_types,
-                }
+                "others": others_dict,
             }
 
             records.append(record)
@@ -308,7 +342,7 @@ def write_jsonl(records, output_path):
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         for record in records:
-            json.dump(record, f, ensure_ascii=False)
+            json.dump(record, f, ensure_ascii=False, cls=_NumpyEncoder)
             f.write("\n")
     print(f"  📁 Written: {output_path} ({len(records)} records)")
 

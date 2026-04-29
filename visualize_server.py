@@ -5,11 +5,19 @@ Usage:
     python visualize_server.py --port 8888 --data_dir output/debug
 
 Then open http://<host>:8888 in browser.
+
+Supports two input layouts:
+    1. BLINK (default for new runs):
+           <data_dir>/<task>.jsonl
+           <data_dir>/images/<task>/*.png
+    2. Parquet (legacy):
+           <data_dir>/**/data.parquet
 """
 
 import argparse
 import base64
 import io
+import json
 import os
 import glob
 
@@ -25,19 +33,37 @@ DATA_DIR = "output/debug"
 # Helpers
 # ──────────────────────────────────────────────────────────────────────
 
-def discover_parquets(data_dir):
-    """Scan data_dir for all data.parquet files, return list of (display_name, path)."""
+def discover_tasks(data_dir):
+    """Scan ``data_dir`` for annotation outputs (BLINK jsonl or parquet).
+
+    Each returned entry carries ``path`` (canonical URL token) plus ``type``
+    so the API can dispatch to the right loader.
+    """
     results = []
-    for pq_path in sorted(glob.glob(os.path.join(data_dir, "**/data.parquet"), recursive=True)):
+
+    # BLINK layout: <data_dir>/<task>.jsonl (+ images/<task>/)
+    for jsonl_path in sorted(glob.glob(os.path.join(data_dir, "*.jsonl"))):
+        task_name = os.path.splitext(os.path.basename(jsonl_path))[0]
+        is_multiview = "multiview" in task_name or task_name.startswith("mmsi_")
+        label = f"{'[Multi] ' if is_multiview else '[Single] '}{task_name}"
+        results.append({
+            "label": label, "path": jsonl_path, "task": task_name,
+            "multiview": is_multiview, "type": "blink",
+        })
+
+    # Legacy parquet layout: <data_dir>/**/data.parquet
+    for pq_path in sorted(glob.glob(os.path.join(data_dir, "**/data.parquet"),
+                                    recursive=True)):
         rel = os.path.relpath(pq_path, data_dir)
         parts = rel.split(os.sep)
-        # e.g. base_pipeline_debug_counting/annotation_stage/counting/data.parquet
-        # display as: counting  (singleview) or multiview_distance (multiview)
         task_name = parts[-2] if len(parts) >= 2 else rel
-        pipeline_name = parts[0] if parts else ""
-        is_multiview = "multiview" in task_name
-        label = f"{'[Multi] ' if is_multiview else '[Single] '}{task_name}"
-        results.append({"label": label, "path": pq_path, "task": task_name, "multiview": is_multiview})
+        is_multiview = "multiview" in task_name or task_name.startswith("mmsi_")
+        label = f"{'[Multi] ' if is_multiview else '[Single] '}{task_name} (parquet)"
+        results.append({
+            "label": label, "path": pq_path, "task": task_name,
+            "multiview": is_multiview, "type": "parquet",
+        })
+
     return results
 
 
@@ -132,6 +158,65 @@ def parse_row(row):
     }
 
 
+def _read_jsonl(path):
+    """Lazy-ish jsonl reader: returns a list of records."""
+    records = []
+    with open(path, "r", encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records
+
+
+def parse_blink_record(record, blink_root):
+    """Parse a single BLINK jsonl record into the same shape as parse_row."""
+    conversations = record.get("conversations", []) or []
+
+    turns = []
+    i = 0
+    while i < len(conversations):
+        msg = conversations[i]
+        if isinstance(msg, dict) and msg.get("from") == "human":
+            q = msg.get("value", "")
+            a = ""
+            if i + 1 < len(conversations):
+                nxt = conversations[i + 1]
+                if isinstance(nxt, dict) and nxt.get("from") == "gpt":
+                    a = nxt.get("value", "")
+                    i += 1
+            turns.append({"question": q, "answer": a})
+        i += 1
+
+    qa_images = []
+    for rel in record.get("image", []) or []:
+        if not isinstance(rel, str):
+            continue
+        abs_path = rel if os.path.isabs(rel) else os.path.join(blink_root, rel)
+        if os.path.exists(abs_path):
+            try:
+                qa_images.append(Image.open(abs_path))
+            except Exception:
+                continue
+
+    others = record.get("others") or {}
+    tags = others.get("question_tags", [])
+    if isinstance(tags, np.ndarray):
+        tags = tags.tolist()
+    qtype = others.get("question_types", record.get("output_type", ""))
+
+    return {
+        "turns": turns,
+        "qa_images": qa_images,
+        "tags": tags,
+        "question_type": qtype,
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────
 # HTML Template
 # ──────────────────────────────────────────────────────────────────────
@@ -191,7 +276,7 @@ HTML_TEMPLATE = """
   <select id="taskSelect" onchange="loadTask()">
     <option value="">-- Select a task --</option>
     {% for t in tasks %}
-    <option value="{{ t.path }}" {{ 'selected' if t.path == selected_path else '' }}>{{ t.label }}</option>
+    <option value="{{ t.path }}" data-kind="{{ t.type }}" {{ 'selected' if t.path == selected_path else '' }}>{{ t.label }}</option>
     {% endfor %}
   </select>
   <div class="nav">
@@ -220,21 +305,30 @@ let currentPage = 0;
 let totalRows = 0;
 
 function loadTask() {
-  const path = document.getElementById('taskSelect').value;
+  const sel = document.getElementById('taskSelect');
+  const path = sel.value;
   if (!path) return;
   currentPage = 0;
   fetchPage(path, 0);
 }
 
 function navigate(delta) {
-  const path = document.getElementById('taskSelect').value;
+  const sel = document.getElementById('taskSelect');
+  const path = sel.value;
   if (!path) return;
   currentPage += delta;
   fetchPage(path, currentPage);
 }
 
+function currentKind() {
+  const sel = document.getElementById('taskSelect');
+  const opt = sel.options[sel.selectedIndex];
+  return opt ? (opt.dataset.kind || '') : '';
+}
+
 function fetchPage(path, page) {
-  fetch(`/api/data?path=${encodeURIComponent(path)}&page=${page}&page_size=${PAGE_SIZE}`)
+  const kind = currentKind();
+  fetch(`/api/data?path=${encodeURIComponent(path)}&kind=${encodeURIComponent(kind)}&page=${page}&page_size=${PAGE_SIZE}`)
     .then(r => r.json())
     .then(data => {
       totalRows = data.total;
@@ -345,7 +439,7 @@ window.onload = () => {
 
 @app.route("/")
 def index():
-    tasks = discover_parquets(DATA_DIR)
+    tasks = discover_tasks(DATA_DIR)
     selected = request.args.get("task", "")
     return render_template_string(HTML_TEMPLATE, tasks=tasks, selected_path=selected)
 
@@ -353,12 +447,37 @@ def index():
 @app.route("/api/data")
 def api_data():
     path = request.args.get("path", "")
+    kind = request.args.get("kind", "")
     page = int(request.args.get("page", 0))
     page_size = int(request.args.get("page_size", 10))
 
     if not path or not os.path.exists(path):
         return jsonify({"total": 0, "page": 0, "rows": []})
 
+    # Auto-detect when kind is absent (older front-end cache).
+    if not kind:
+        kind = "blink" if path.endswith(".jsonl") else "parquet"
+
+    if kind == "blink":
+        records = _read_jsonl(path)
+        total = len(records)
+        start = page * page_size
+        end = min(start + page_size, total)
+        blink_root = os.path.dirname(os.path.abspath(path))
+
+        rows = []
+        for i in range(start, end):
+            parsed = parse_blink_record(records[i], blink_root)
+            img_b64_list = [pil_to_base64(img) for img in parsed["qa_images"]]
+            rows.append({
+                "turns": parsed["turns"],
+                "qa_images": img_b64_list,
+                "tags": parsed["tags"] if isinstance(parsed["tags"], list) else [parsed["tags"]],
+                "question_type": parsed["question_type"],
+            })
+        return jsonify({"total": total, "page": page, "rows": rows})
+
+    # Parquet (legacy) path
     df = pd.read_parquet(path)
     total = len(df)
     start = page * page_size
@@ -368,7 +487,6 @@ def api_data():
     for i in range(start, end):
         row = df.iloc[i]
         parsed = parse_row(row)
-        # Convert images to base64
         img_b64_list = [pil_to_base64(img) for img in parsed["qa_images"]]
         rows.append({
             "turns": parsed["turns"],
@@ -392,7 +510,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     DATA_DIR = args.data_dir
-    tasks = discover_parquets(DATA_DIR)
+    tasks = discover_tasks(DATA_DIR)
     print(f"Found {len(tasks)} task outputs in {DATA_DIR}:")
     for t in tasks:
         print(f"  {t['label']} -> {t['path']}")
