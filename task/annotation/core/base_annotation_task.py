@@ -257,7 +257,13 @@ class BaseAnnotationTask(BaseTask):
         Thread-safe: each thread gets its own VisualMarker via the thread-local
         `self.marker` property, avoiding shared mutable color_queue state.
         """
+        # Best-effort scene identifier for diagnostic prints.
+        scene_id = example.get("scene_id") if isinstance(example, dict) else None
+        task_name = self.__class__.__name__
+
         if not self.check_example(example):
+            print(f"[apply_transform] {task_name} DROPPED by check_example  "
+                  f"scene={scene_id}", flush=True)
             return None, False
 
         # Reset thread-local marker for this example
@@ -277,7 +283,13 @@ class BaseAnnotationTask(BaseTask):
                 f"process() must return 4- or 5-tuple, got length {len(process_result)}"
             )
 
+        print(f"[apply_transform] {task_name} process -> "
+              f"prompts={len(prompts)}  images={len(processed_images)}  "
+              f"qtypes={question_types}  scene={scene_id}", flush=True)
+
         if len(prompts) == 0:
+            print(f"[apply_transform] {task_name} DROPPED prompts=0  "
+                  f"scene={scene_id}", flush=True)
             return None, False
 
         messages = self.create_messages_from_prompts(prompts, processed_images)
@@ -291,6 +303,9 @@ class BaseAnnotationTask(BaseTask):
         if self._cog_settings.active:
             self._attach_cognitive_maps(example, graph, prompts, cog_contexts,
                                         question_tags)
+
+        print(f"[apply_transform] {task_name} OK  messages={len(messages)}  "
+              f"QA_images={len(processed_images)}  scene={scene_id}", flush=True)
         return example, True
 
     # ─── Cognitive Map Hooks ─────────────────────────────────────────────
@@ -315,22 +330,40 @@ class BaseAnnotationTask(BaseTask):
 
     def _attach_cognitive_maps(self, example, graph, prompts, cog_contexts,
                                question_tags):
-        """Build cognitive maps for each generated QA and attach to example."""
+        """Build cognitive maps for each generated QA and attach to example.
+
+        The stored ``cognitive_maps`` list contains MindCube-format dicts
+        (``{objects, views}`` with grid-cell positions and direction words)
+        so they can be directly serialized into JSONL for downstream use.
+        """
+        from .cognitive_map import CognitiveMapBuilder
+
         maps = []
         images = []
         for i, prompt in enumerate(prompts):
             ctx = cog_contexts[i] if i < len(cog_contexts) else None
-            cmap = None
+            cmap_internal = None
+            cmap_mindcube = None
             cmap_img = None
             if ctx is not None and self._cog_builder is not None:
                 try:
-                    cmap = self._cog_builder.build(graph, ctx)
+                    cmap_internal = self._cog_builder.build(graph, ctx)
                 except Exception:
-                    cmap = None
-            if cmap is not None and self._cog_renderer is not None:
+                    cmap_internal = None
+            if cmap_internal is not None:
+                # Build view_idx -> 1-based image number mapping from context.
+                view_map = None
+                if ctx is not None and ctx.view_indices:
+                    view_map = {vi: idx + 1
+                                for idx, vi in enumerate(ctx.view_indices)}
+                cmap_mindcube = CognitiveMapBuilder.to_mindcube_format(
+                    cmap_internal, view_index_to_image_num=view_map)
+            # Render using MindCube format (grid-cell canvas).
+            render_target = cmap_mindcube if cmap_mindcube is not None else cmap_internal
+            if render_target is not None and self._cog_renderer is not None:
                 q_text, a_text = self._split_question_answer(prompt)
                 try:
-                    cmap_img = self._cog_renderer.render(cmap, q_text, a_text)
+                    cmap_img = self._cog_renderer.render(render_target, q_text, a_text)
                 except Exception:
                     cmap_img = None
                 with self._cog_dump_lock:
@@ -341,7 +374,7 @@ class BaseAnnotationTask(BaseTask):
                     tag = question_tags[i][0] if (i < len(question_tags)
                                                   and question_tags[i]) else "tag"
                     self._maybe_dump_sample(cmap_img, tag)
-            maps.append(cmap)
+            maps.append(cmap_mindcube)
             images.append(cmap_img)
         example["cognitive_maps"] = maps
         example["cognitive_map_images"] = images
