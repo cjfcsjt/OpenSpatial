@@ -35,6 +35,8 @@ TASK_FILTER=""
 MAX_WORKERS=32
 TONEMAP_WORKERS=16
 CHUNK_SIZE=1000
+MAX_SCENES=""                 # empty = no limit (smoke testing)
+MAX_TASKS=""                  # empty = no limit (hard-cap on total (scene,cam,frame) tasks in Parquet step)
 
 usage() {
     cat <<EOF
@@ -48,6 +50,8 @@ Options:
   --max-workers N       Max parallel workers for preprocessing (default: 32)
   --tonemap-workers N   Max parallel workers for tonemapping (default: 16)
   --chunk-size N        Records per Parquet file (default: 1000)
+  --max-scenes N        Limit number of scenes per step (for smoke testing)
+  --max-tasks N         Hard-cap on total (scene, camera, frame) tasks in Parquet step (for smoke testing)
   -h, --help            Show this help message
 
 Examples:
@@ -55,6 +59,7 @@ Examples:
   $0 --start-step 2                           # skip raw preprocessing
   $0 --start-step 3 --multiview-only          # only multiview QA
   $0 --tasks demo_depth,demo_distance         # specific tasks
+  $0 --max-scenes 2 --max-tasks 20            # smoke test
 EOF
     exit 0
 }
@@ -84,6 +89,12 @@ while [[ $# -gt 0 ]]; do
             ;;
         --chunk-size)
             CHUNK_SIZE="$2"; shift 2
+            ;;
+        --max-scenes)
+            MAX_SCENES="$2"; shift 2
+            ;;
+        --max-tasks)
+            MAX_TASKS="$2"; shift 2
             ;;
         -h|--help)
             usage
@@ -189,6 +200,14 @@ if [[ "$START_STEP" -le 1 ]]; then
             NAME_FILTER_ARG="--name_filter_json ${NAME_FILTER_JSON}"
         fi
 
+        EXTRA_ARGS=""
+        if [[ -n "${MAX_SCENES}" ]]; then
+            EXTRA_ARGS="${EXTRA_ARGS} --max_scenes ${MAX_SCENES}"
+        fi
+        if [[ -n "${MAX_TASKS}" ]]; then
+            EXTRA_ARGS="${EXTRA_ARGS} --max_tasks ${MAX_TASKS}"
+        fi
+
         python data_preprocessing/hypersim/prepare_hypersim.py \
             --input_root       "${HYPERSIM_RAW}" \
             --output_dir       "${PARQUET_RAW_DIR}" \
@@ -198,6 +217,7 @@ if [[ "$START_STEP" -le 1 ]]; then
             --max_workers      "${MAX_WORKERS}" \
             --tonemap_workers  "${TONEMAP_WORKERS}" \
             ${NAME_FILTER_ARG} \
+            ${EXTRA_ARGS} \
             2>&1 | tee "${LOG_DIR}/step1_prepare_hypersim.log"
 
         touch "${STEP1_DONE}"
