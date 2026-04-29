@@ -113,7 +113,8 @@ log "Config: start-step=${START_STEP}  multiview-only=${MULTIVIEW_ONLY}  singlev
 
 # ==================== [0] paths ==============================================
 export PROJECT_ROOT="/apdcephfs_303747097/share_303747097/jingfanchen/code/OpenSpatial"
-export HYPERSIM_RAW="/path/to/Hypersim"                 # <-- Hypersim raw data root
+export HYPERSIM_RAW="/path/to/Hypersim"                 # <-- Hypersim raw data root (RGB/depth/HDF5)
+export HYPERSIM_MESH_ROOT=""                             # <-- Hypersim mesh archive root (contains <scene>/_detail/mesh/). Leave empty to reuse HYPERSIM_RAW.
 export CAMERA_PARAMS_CSV="${PROJECT_ROOT}/data_preprocessing/hypersim/metadata_camera_parameters.csv"
 export LABELS_TSV="${PROJECT_ROOT}/data_preprocessing/scannetpp/scannet-labels.combined.tsv"
 export NAME_FILTER_JSON=""                               # <-- optional: path to Hypersim_name_filter_results.json
@@ -206,6 +207,10 @@ if [[ "$START_STEP" -le 1 ]]; then
         fi
         if [[ -n "${MAX_TASKS}" ]]; then
             EXTRA_ARGS="${EXTRA_ARGS} --max_tasks ${MAX_TASKS}"
+        fi
+        if [[ -n "${HYPERSIM_MESH_ROOT}" ]]; then
+            need_dir "${HYPERSIM_MESH_ROOT}"
+            EXTRA_ARGS="${EXTRA_ARGS} --mesh_root ${HYPERSIM_MESH_ROOT}"
         fi
 
         python data_preprocessing/hypersim/prepare_hypersim.py \

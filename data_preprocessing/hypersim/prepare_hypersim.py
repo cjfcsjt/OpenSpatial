@@ -431,9 +431,16 @@ def process_single_scene_parquet(
     frame_id: str,
     id_to_name: dict,
     name_filter: dict | None,
+    mesh_root_dir: str | None = None,
 ) -> dict | None:
-    """Process a single (scene, camera, frame) tuple and return a record dict."""
+    """Process a single (scene, camera, frame) tuple and return a record dict.
+
+    ``mesh_root_dir`` optionally points to a *separate* root that contains the
+    per-scene ``_detail/mesh/`` sub-tree (Hypersim distributes mesh assets as an
+    independent archive). When ``None``, falls back to ``input_root_dir``.
+    """
     try:
+        mesh_root = mesh_root_dir if mesh_root_dir else input_root_dir
         record_id = f"{scene_id}-{camera_id}-{frame_id}"
         image = os.path.abspath(os.path.join(
             input_root_dir, scene_id, "images", f"scene_{camera_id}_final_preview", f"frame.{frame_id}.tonemap.jpg"))
@@ -448,19 +455,21 @@ def process_single_scene_parquet(
             input_root_dir, scene_id, "images", f"scene_{camera_id}_geometry_hdf5", f"frame.{frame_id}.semantic_instance.hdf5"))
         semantic_hdf5 = os.path.abspath(os.path.join(
             input_root_dir, scene_id, "images", f"scene_{camera_id}_geometry_hdf5", f"frame.{frame_id}.semantic.hdf5"))
+        # Mesh-side assets live under ``mesh_root`` so users can keep them on a
+        # separate disk / archive from the rendered RGB/depth data.
         object_label_csv = os.path.abspath(os.path.join(
-            input_root_dir, scene_id, "_detail", "mesh", "metadata_objects.csv"))
+            mesh_root, scene_id, "_detail", "mesh", "metadata_objects.csv"))
         sii_hdf5 = os.path.abspath(os.path.join(
-            input_root_dir, scene_id, "_detail", "mesh", "mesh_objects_sii.hdf5"))
+            mesh_root, scene_id, "_detail", "mesh", "mesh_objects_sii.hdf5"))
 
         extents_path = os.path.abspath(os.path.join(
-            input_root_dir, scene_id, "_detail", "mesh",
+            mesh_root, scene_id, "_detail", "mesh",
             "metadata_semantic_instance_bounding_box_object_aligned_2d_extents.hdf5"))
         orientations_path = os.path.abspath(os.path.join(
-            input_root_dir, scene_id, "_detail", "mesh",
+            mesh_root, scene_id, "_detail", "mesh",
             "metadata_semantic_instance_bounding_box_object_aligned_2d_orientations.hdf5"))
         positions_path = os.path.abspath(os.path.join(
-            input_root_dir, scene_id, "_detail", "mesh",
+            mesh_root, scene_id, "_detail", "mesh",
             "metadata_semantic_instance_bounding_box_object_aligned_2d_positions.hdf5"))
         scale_csv = os.path.abspath(os.path.join(
             input_root_dir, scene_id, "_detail", "metadata_scene.csv"))
@@ -578,6 +587,7 @@ def run_parquet(
     max_workers: int = 32,
     max_scenes: int | None = None,
     max_tasks: int | None = None,
+    mesh_root: str | None = None,
 ) -> None:
     """Step 5: generate Parquet files from all processed data."""
     print("=" * 60)
@@ -642,7 +652,7 @@ def run_parquet(
             executor.submit(
                 process_single_scene_parquet,
                 input_root, scene_ids[i], camera_ids[i], frame_ids[i],
-                id_to_name, name_filter,
+                id_to_name, name_filter, mesh_root,
             ): i
             for i in range(len(scene_ids))
         }
@@ -724,6 +734,15 @@ def parse_args() -> argparse.Namespace:
         "--max_tasks", type=int, default=None,
         help="Hard-cap on total (scene, camera, frame) tasks in the Parquet step (for smoke testing).",
     )
+    parser.add_argument(
+        "--mesh_root", type=str, default=None,
+        help=(
+            "Optional root dir that hosts the per-scene `_detail/mesh/` sub-tree "
+            "(Hypersim distributes mesh assets as an independent archive). "
+            "Must follow the same `<scene_id>/_detail/mesh/...` layout as "
+            "--input_root. If omitted, falls back to --input_root."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -747,6 +766,7 @@ def main() -> None:
         max_workers=args.max_workers,
         max_scenes=args.max_scenes,
         max_tasks=args.max_tasks,
+        mesh_root=args.mesh_root,
     )
 
     print("=" * 60)
