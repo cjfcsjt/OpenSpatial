@@ -15,10 +15,55 @@ pipeline:
         scaling_factor: 1
         filter_tags: ["ceiling", "floor", "wall", "object"]
         sub_tasks:
-          camera_camera_mcq: 1
+          camera_camera_mcq: 10
         max_num_views: 400
+        # Frame-selection policy: B1 = enumerate-then-sample. We enumerate
+        # every (anchor_node, v_a, v_b) triple that passes the filters below
+        # and then diversely sample up to `sub_tasks.camera_camera_mcq`
+        # items per scene. The shared anchor box guarantees the two cameras
+        # share visual context, so the camera-to-camera direction is
+        # answerable from image evidence (not just pose arithmetic).
+        #
+        # Pose-diversity threshold (OR-combined, 3D):
+        #   accept if rotation >= min_rot_angle OR translation >= min_translation.
         min_rot_angle: 15.0
         min_translation: 0.5
+        # Horizontal-plane translation hard floor (AND-combined, 2D):
+        #   reject the pair if |Δxy| < min_horizontal_translation (meters).
+        # Complements `min_translation`: the OR rule above can let through
+        # pairs where the camera barely moved but rotated a lot, which
+        # makes the direction answer noise-dominated. This filter rules
+        # out near-stationary cameras on the horizontal plane.
+        # With the 8-way answer space, diagonal offsets (FR/BR/BL/FL) are
+        # first-class answers, so we can admit more pairs — a looser floor
+        # keeps yield high without hurting answer quality.
+        # Set to 0 to disable.
+        min_horizontal_translation: 0.3
+        # Vertical translation hard ceiling (AND-combined, 1D):
+        #   reject the pair if |Δz_world| > max_vertical_translation (meters).
+        # The BEV-plane (dx, dz) decomposition is z-invariant, so height
+        # differences do NOT corrupt the numeric answer — but they DO
+        # visibly skew the viewer's direction intuition when one image is
+        # crouched and the other is standing. Keeping both cameras within
+        # ~0.5 m of vertical separation preserves the "two people walking
+        # around at roughly the same level" framing the question assumes.
+        # Raise (e.g. 1.0) to admit larger height gaps; set to 0 to drop
+        # the filter and also disable it.
+        max_vertical_translation: 0.3
+        # Octant-boundary margin (8-way): reject the pair if B's bearing
+        # in A's horizontal-plane local frame lies within `boundary_margin_deg`
+        # of an octant boundary (22.5° / 67.5° / 112.5° / 157.5° …). This
+        # avoids answers that sit right on the fence between, say, Front
+        # and Front-Right where tiny pose noise could flip the label.
+        #
+        # Bearing is measured as θ = atan2(dx, dz), with dx (right) and
+        # dz (forward) computed on the world horizontal plane (z-up world,
+        # A's forward/right projected onto xy and renormalized) — same
+        # convention as the BEV renderer.
+        #
+        # Default 5° margin → accept if the bearing is within the inner
+        # 35° of any 45° octant. Set to 0 to disable boundary filtering.
+        boundary_margin_deg: 5.0
         use_multi_processing: false
         num_workers: 8
         output_dir:

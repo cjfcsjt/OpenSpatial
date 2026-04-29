@@ -27,3 +27,8 @@ pipeline:
         use_multi_processing: false
         num_workers: 8
         output_dir:
+        cognitive_map:
+          enable: true
+          enable_visualization: true
+          dump_samples: true
+          dump_sample_count: 20

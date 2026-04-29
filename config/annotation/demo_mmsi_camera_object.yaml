@@ -15,10 +15,54 @@ pipeline:
         scaling_factor: 1
         filter_tags: ["ceiling", "floor", "wall", "object"]
         sub_tasks:
-          camera_object_mcq: 1
+          # Cross-view inference: object visible only in image 2, the
+          # question asks its direction relative to image 1's camera.
+          # Answer covers the full 8-octant circle.
+          camera_object_cross_mcq: 1
+          # Single-view grounding: object visible in image 1, question
+          # asks its direction relative to image 1's camera. Answer is
+          # biased toward the front hemisphere; see `self_min_bearing_deg`.
+          camera_object_self_mcq: 1
         max_num_views: 400
+        # Generic (OR-combined, 3D) pose-diversity threshold on (v_a, v_b).
         min_rot_angle: 15.0
         min_translation: 0.5
+        # Horizontal-plane camera-pair translation floor (AND, 2D). Rules
+        # out near-stationary pairs where the two images are basically
+        # the same shot. With 8-way answers, diagonal offsets are
+        # first-class so the floor can stay loose.
+        min_horizontal_translation: 0.3
+        # Vertical (world-z) camera-pair translation ceiling (AND, 1D).
+        # BEV math is z-invariant but visual intuition is not — large
+        # height gaps make the two images look like they were taken at
+        # different scene levels. Matches camera-camera default.
+        max_vertical_translation: 0.3
+        # Minimum horizontal distance from the reference camera to the
+        # target object. Sub-decimeter distances give unstable bearings
+        # dominated by pose noise rather than actual layout. Set to 0
+        # to disable.
+        min_object_horizontal_distance: 0.3
+        # 8-way octant boundary margin. Reject targets whose bearing
+        # sits within this many degrees of a 22.5° / 67.5° / 112.5° /
+        # 157.5° boundary, so tiny pose noise cannot flip the label to
+        # a neighbouring octant. Same semantics as camera-camera.
+        boundary_margin_deg: 5.0
+        # Lower bound on |bearing| for the SELF variant only. The target
+        # has to be visible in image 1 (so it projects into the frustum)
+        # which naturally biases answers toward Front. A 30° floor
+        # forbids "straight-ahead" targets and concentrates mass near
+        # the 45°/90° layouts (Front-Right, Right, Front-Left, Left)
+        # — these are the "roughly 45° / 90°" positions the task is
+        # designed around. Set to 0 to disable.
+        self_min_bearing_deg: 30.0
+        # Lower bound on |bearing| for the CROSS variant. Cross-view
+        # naturally covers the full 8-octant circle (including behind
+        # v_a), so we leave this at 0 by default. Raise if you want to
+        # forbid near-axis bearings in cross-view too.
+        cross_min_bearing_deg: 0.0
+        # How many random anchor-view draws we allow per scene before
+        # giving up. Higher = better yield at higher cost per scene.
+        max_retries: 60
         use_multi_processing: false
         num_workers: 8
         output_dir:
