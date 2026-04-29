@@ -441,6 +441,24 @@ def process_single_scene_parquet(
     """
     try:
         mesh_root = mesh_root_dir if mesh_root_dir else input_root_dir
+
+        def _mesh_path(*parts: str) -> str:
+            """Resolve a ``_detail/mesh/...`` file under ``mesh_root`` with
+            per-file fallback to ``input_root_dir``.
+
+            When users keep Hypersim's mesh archive on a separate disk, some
+            scenes/files may still live under the raw root (e.g. partial
+            downloads). We therefore try ``mesh_root`` first and transparently
+            fall back to ``input_root_dir`` whenever the mesh-root copy is
+            missing, so the worker degrades gracefully instead of skipping the
+            whole frame.
+            """
+            primary = os.path.abspath(os.path.join(mesh_root, *parts))
+            if os.path.exists(primary) or mesh_root == input_root_dir:
+                return primary
+            fallback = os.path.abspath(os.path.join(input_root_dir, *parts))
+            return fallback if os.path.exists(fallback) else primary
+
         record_id = f"{scene_id}-{camera_id}-{frame_id}"
         image = os.path.abspath(os.path.join(
             input_root_dir, scene_id, "images", f"scene_{camera_id}_final_preview", f"frame.{frame_id}.tonemap.jpg"))
@@ -456,21 +474,22 @@ def process_single_scene_parquet(
         semantic_hdf5 = os.path.abspath(os.path.join(
             input_root_dir, scene_id, "images", f"scene_{camera_id}_geometry_hdf5", f"frame.{frame_id}.semantic.hdf5"))
         # Mesh-side assets live under ``mesh_root`` so users can keep them on a
-        # separate disk / archive from the rendered RGB/depth data.
-        object_label_csv = os.path.abspath(os.path.join(
-            mesh_root, scene_id, "_detail", "mesh", "metadata_objects.csv"))
-        sii_hdf5 = os.path.abspath(os.path.join(
-            mesh_root, scene_id, "_detail", "mesh", "mesh_objects_sii.hdf5"))
+        # separate disk / archive from the rendered RGB/depth data. We fall
+        # back to ``input_root_dir`` on a per-file basis via ``_mesh_path``.
+        object_label_csv = _mesh_path(
+            scene_id, "_detail", "mesh", "metadata_objects.csv")
+        sii_hdf5 = _mesh_path(
+            scene_id, "_detail", "mesh", "mesh_objects_sii.hdf5")
 
-        extents_path = os.path.abspath(os.path.join(
-            mesh_root, scene_id, "_detail", "mesh",
-            "metadata_semantic_instance_bounding_box_object_aligned_2d_extents.hdf5"))
-        orientations_path = os.path.abspath(os.path.join(
-            mesh_root, scene_id, "_detail", "mesh",
-            "metadata_semantic_instance_bounding_box_object_aligned_2d_orientations.hdf5"))
-        positions_path = os.path.abspath(os.path.join(
-            mesh_root, scene_id, "_detail", "mesh",
-            "metadata_semantic_instance_bounding_box_object_aligned_2d_positions.hdf5"))
+        extents_path = _mesh_path(
+            scene_id, "_detail", "mesh",
+            "metadata_semantic_instance_bounding_box_object_aligned_2d_extents.hdf5")
+        orientations_path = _mesh_path(
+            scene_id, "_detail", "mesh",
+            "metadata_semantic_instance_bounding_box_object_aligned_2d_orientations.hdf5")
+        positions_path = _mesh_path(
+            scene_id, "_detail", "mesh",
+            "metadata_semantic_instance_bounding_box_object_aligned_2d_positions.hdf5")
         scale_csv = os.path.abspath(os.path.join(
             input_root_dir, scene_id, "_detail", "metadata_scene.csv"))
 
