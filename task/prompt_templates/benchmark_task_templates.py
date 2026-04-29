@@ -44,9 +44,16 @@ mmsi_camera_camera_questions = [
 mmsi_camera_camera_answers = ["[X]"]
 
 # ─── MMSI Camera–Object ───────────────────────────────────────────────
+# Two wording variants, matching the two sub-tasks emitted by
+# ``mmsi_camera_object.py``:
+#   * cross: object visible only in image 2, asked w.r.t. image 1
+#   * self:  object visible in image 1, asked w.r.t. image 1 itself
+# Both resolve to the same 8-option MCQ answer space.
 mmsi_camera_object_questions = [
-    "In image 2, where is the [A] relative to the camera that took image 1? "
-    "[Y]",
+    "In image 2, where is the [A] located relative to the camera that "
+    "took image 1? [Y]",
+    "In image 1, where is the [A] located relative to the camera that "
+    "took image 1? [Y]",
 ]
 mmsi_camera_object_answers = ["[X]"]
 
