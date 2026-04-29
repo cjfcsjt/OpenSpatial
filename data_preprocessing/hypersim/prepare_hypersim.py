@@ -591,6 +591,11 @@ def process_single_scene_parquet(
             "nyu_tags": label_names,
             "obj_names_detailed": obj_names,
             "instance_ids": instance_ids,
+            # Hypersim is already expressed in a metric right-handed camera
+            # frame, so no extra axis-alignment rotation is needed. We still
+            # emit the field (as None) to match the schema expected by
+            # task/group/group.py's default ``group_col_list``.
+            "axis_align_matrix": None,
         }
     except Exception as e:
         print(f"[parquet] Error processing {scene_id}: {e}")
