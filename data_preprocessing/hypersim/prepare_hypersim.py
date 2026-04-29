@@ -64,11 +64,18 @@ def extract_intrinsics(camera_params_csv: str, scene_name: str, output_json: str
     np.savetxt(output_txt, intrinsic_4x4)
 
 
-def run_intrinsics(input_root: str, camera_params_csv: str) -> None:
+def run_intrinsics(
+    input_root: str,
+    camera_params_csv: str,
+    max_scenes: int | None = None,
+) -> None:
     """Step 1: extract intrinsics for every scene."""
     print("=" * 60)
     print("[Step 1/5] Extracting intrinsics ...")
     scene_names = sorted(os.listdir(input_root))
+    if max_scenes is not None and max_scenes > 0:
+        scene_names = scene_names[:max_scenes]
+        print(f"  (limited to first {len(scene_names)} scene(s) via --max-scenes)")
     for scene_name in tqdm(scene_names, desc="intrinsics"):
         output_json = os.path.join(input_root, scene_name, "_detail", "intrinsics.json")
         extract_intrinsics(camera_params_csv, scene_name, output_json)
@@ -122,11 +129,14 @@ def save_extrinsics_per_frame(
             np.savetxt(os.path.join(output_dir, txt_name), extrinsic)
 
 
-def run_extrinsics(input_root: str) -> None:
+def run_extrinsics(input_root: str, max_scenes: int | None = None) -> None:
     """Step 2: extract extrinsics for every scene / camera."""
     print("=" * 60)
     print("[Step 2/5] Extracting extrinsics ...")
     scenes = sorted(os.listdir(input_root))
+    if max_scenes is not None and max_scenes > 0:
+        scenes = scenes[:max_scenes]
+        print(f"  (limited to first {len(scenes)} scene(s) via --max-scenes)")
     for scene_name in tqdm(scenes, desc="extrinsics"):
         scene_dir = os.path.join(input_root, scene_name, "_detail")
         if not os.path.isdir(scene_dir):
@@ -203,11 +213,18 @@ def tonemap_single_frame(
     cv2.imwrite(out_jpg, img_bgr)
 
 
-def run_rgb_tonemap(input_root: str, max_workers: int = 16) -> None:
+def run_rgb_tonemap(
+    input_root: str,
+    max_workers: int = 16,
+    max_scenes: int | None = None,
+) -> None:
     """Step 3: tonemap HDR renders to preview JPGs."""
     print("=" * 60)
     print("[Step 3/5] Tonemapping RGB images ...")
     scene_dirs = sorted(os.listdir(input_root))
+    if max_scenes is not None and max_scenes > 0:
+        scene_dirs = scene_dirs[:max_scenes]
+        print(f"  (limited to first {len(scene_dirs)} scene(s) via --max-scenes)")
 
     for scene_dir in tqdm(scene_dirs, desc="tonemap"):
         images_dir = os.path.join(input_root, scene_dir, "images")
@@ -298,11 +315,14 @@ def load_intrinsic_json(json_path: str) -> np.ndarray:
         return np.array(json.load(f))
 
 
-def run_depth(input_root: str) -> None:
+def run_depth(input_root: str, max_scenes: int | None = None) -> None:
     """Step 4: convert Euclidean distance to planar depth for every scene / camera."""
     print("=" * 60)
     print("[Step 4/5] Converting depth maps ...")
     scene_names = sorted(os.listdir(input_root))
+    if max_scenes is not None and max_scenes > 0:
+        scene_names = scene_names[:max_scenes]
+        print(f"  (limited to first {len(scene_names)} scene(s) via --max-scenes)")
 
     for scene_name in tqdm(scene_names, desc="depth"):
         intrinsic_path = os.path.join(input_root, scene_name, "_detail", "intrinsics.json")
@@ -556,6 +576,8 @@ def run_parquet(
     name_filter_json: str | None,
     chunk_size: int = 1000,
     max_workers: int = 32,
+    max_scenes: int | None = None,
+    max_tasks: int | None = None,
 ) -> None:
     """Step 5: generate Parquet files from all processed data."""
     print("=" * 60)
@@ -567,14 +589,22 @@ def run_parquet(
         d for d in os.listdir(input_root)
         if os.path.isdir(os.path.join(input_root, d))
     ])
+    if max_scenes is not None and max_scenes > 0:
+        scene_dirs = scene_dirs[:max_scenes]
+        print(f"  (limited to first {len(scene_dirs)} scene(s) via --max-scenes)")
 
     scene_ids, camera_ids, frame_ids = [], [], []
+    reached_task_cap = False
     for scene_dir in tqdm(scene_dirs, desc="enumerating frames"):
+        if reached_task_cap:
+            break
         detail_dir = os.path.join(input_root, scene_dir, "_detail")
         if not os.path.isdir(detail_dir):
             continue
         cam_dirs = [d for d in os.listdir(detail_dir) if d.startswith("cam_")]
         for cam_dir in cam_dirs:
+            if reached_task_cap:
+                break
             frame_files = glob.glob(os.path.join(
                 input_root, scene_dir, "images",
                 f"scene_{cam_dir}_final_preview", "frame.*.tonemap.jpg"))
@@ -583,6 +613,15 @@ def run_parquet(
                 scene_ids.append(scene_dir)
                 camera_ids.append(cam_dir)
                 frame_ids.append(frame_idx_str)
+                if max_tasks is not None and max_tasks > 0 and len(scene_ids) >= max_tasks:
+                    reached_task_cap = True
+                    break
+
+    if max_tasks is not None and max_tasks > 0 and len(scene_ids) > max_tasks:
+        print(f"  (truncating {len(scene_ids)} → {max_tasks} tasks via --max-tasks)")
+        scene_ids = scene_ids[:max_tasks]
+        camera_ids = camera_ids[:max_tasks]
+        frame_ids = frame_ids[:max_tasks]
 
     print(f"Found {len(scene_ids)} frames in total.")
 
@@ -677,16 +716,28 @@ def parse_args() -> argparse.Namespace:
         "--tonemap_workers", type=int, default=16,
         help="Max parallel workers for RGB tonemapping (default: 16).",
     )
+    parser.add_argument(
+        "--max_scenes", type=int, default=None,
+        help="Limit number of scenes processed in every step (for smoke testing).",
+    )
+    parser.add_argument(
+        "--max_tasks", type=int, default=None,
+        help="Hard-cap on total (scene, camera, frame) tasks in the Parquet step (for smoke testing).",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    run_intrinsics(args.input_root, args.camera_params_csv)
-    run_extrinsics(args.input_root)
-    run_rgb_tonemap(args.input_root, max_workers=args.tonemap_workers)
-    run_depth(args.input_root)
+    run_intrinsics(args.input_root, args.camera_params_csv, max_scenes=args.max_scenes)
+    run_extrinsics(args.input_root, max_scenes=args.max_scenes)
+    run_rgb_tonemap(
+        args.input_root,
+        max_workers=args.tonemap_workers,
+        max_scenes=args.max_scenes,
+    )
+    run_depth(args.input_root, max_scenes=args.max_scenes)
     run_parquet(
         args.input_root,
         args.output_dir,
@@ -694,6 +745,8 @@ def main() -> None:
         args.name_filter_json,
         chunk_size=args.chunk_size,
         max_workers=args.max_workers,
+        max_scenes=args.max_scenes,
+        max_tasks=args.max_tasks,
     )
 
     print("=" * 60)
