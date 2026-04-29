@@ -110,6 +110,7 @@ export RUN_ROOT="${PROJECT_ROOT}/output/scannetpp_run"
 export PARQUET_RAW_DIR="${RUN_ROOT}/01_parquet_raw"
 export PIPELINE_OUT_DIR="${RUN_ROOT}/02_pipeline"
 export ANNOT_OUT_DIR="${RUN_ROOT}/03_annotation"
+export BLINK_OUT_DIR="${RUN_ROOT}/04_blink"
 export TMP_CFG_DIR="${RUN_ROOT}/_tmp_configs"
 export LOG_DIR="${RUN_ROOT}/logs"
 export TAGS_TSV="${PROJECT_ROOT}/data_preprocessing/scannetpp/scannet-labels.combined.tsv"
@@ -117,7 +118,7 @@ export TAGS_TSV="${PROJECT_ROOT}/data_preprocessing/scannetpp/scannet-labels.com
 # export HF_ENDPOINT="https://hf-mirror.com"
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 
-mkdir -p "${PARQUET_RAW_DIR}" "${PIPELINE_OUT_DIR}" "${ANNOT_OUT_DIR}" "${TMP_CFG_DIR}" "${LOG_DIR}"
+mkdir -p "${PARQUET_RAW_DIR}" "${PIPELINE_OUT_DIR}" "${ANNOT_OUT_DIR}" "${BLINK_OUT_DIR}" "${TMP_CFG_DIR}" "${LOG_DIR}"
 cd "${PROJECT_ROOT}"
 
 # ==================== task definitions =======================================
@@ -304,23 +305,55 @@ else
     log "[Step 3] skipped (--start-step ${START_STEP})"
 fi
 
+# ==================== [3c] Export QA parquet → JSONL + images folder ========
+# See the embodiedscan pipeline for rationale — we keep parquet for the
+# visualize_server / downstream reuse, but also emit a BLINK / MindCube-style
+# JSONL plus a standalone ``images/`` folder for training-time consumption.
+if [[ "$START_STEP" -le 3 ]]; then
+    log "[Step 3c] Export QA parquet → JSONL + images folder (${BLINK_OUT_DIR})"
+    python "${PROJECT_ROOT}/convert_to_blink.py" \
+        --input_dir   "${ANNOT_OUT_DIR}" \
+        --output_dir  "${BLINK_OUT_DIR}" \
+        --data_source "OpenSpatial_ScanNetPP" \
+        2>&1 | tee "${LOG_DIR}/step3c_convert_to_blink.log"
+    ok "[Step 3c] BLINK export done: ${BLINK_OUT_DIR}"
+fi
+
 # ==================== [4] Result summary ====================================
 if [[ "$START_STEP" -le 4 ]]; then
     log "[Step 4] Result summary"
-    python - "${ANNOT_OUT_DIR}" <<'PY'
+    python - "${ANNOT_OUT_DIR}" "${BLINK_OUT_DIR}" <<'PY'
 import pathlib, sys, pandas as pd
-root = pathlib.Path(sys.argv[1])
+annot_root, blink_root = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 rows = []
-for p in sorted(root.rglob("data.parquet")):
+for p in sorted(annot_root.rglob("data.parquet")):
     try:
         n = len(pd.read_parquet(p, columns=["messages"])) if "messages" in pd.read_parquet(p, columns=[]).columns else len(pd.read_parquet(p))
     except Exception:
         try: n = len(pd.read_parquet(p))
         except Exception as e: n = f"err:{e}"
-    rows.append((p.relative_to(root), n))
+    rows.append((p.relative_to(annot_root), n))
+print("== parquet (annotation) ==")
 for rel, n in rows:
     print(f"  {n:>8}  {rel}")
-print(f"\nTotal parquet files: {len(rows)}")
+print(f"  Total parquet files: {len(rows)}")
+
+print("\n== jsonl (BLINK-format) ==")
+jsonl_rows = []
+for p in sorted(blink_root.glob("*.jsonl")):
+    try:
+        with p.open() as f:
+            n = sum(1 for _ in f)
+    except Exception as e:
+        n = f"err:{e}"
+    jsonl_rows.append((p.name, n))
+for name, n in jsonl_rows:
+    print(f"  {n:>8}  {name}")
+print(f"  Total jsonl files:   {len(jsonl_rows)}")
+img_root = blink_root / "images"
+if img_root.is_dir():
+    n_imgs = sum(1 for _ in img_root.rglob("*.png"))
+    print(f"  Total images (png):  {n_imgs}  ({img_root})")
 PY
 fi
 
