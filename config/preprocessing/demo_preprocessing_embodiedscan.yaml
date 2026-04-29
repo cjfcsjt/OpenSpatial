@@ -40,3 +40,12 @@ pipeline:
         depends_on: localization_stage/sam2_refiner
         output_dir:
 
+    group_stage:
+      -
+        file_name: group
+        method: SampleGrouper
+        group_by: scene_id
+        group_col_list: ['image', 'id', 'obj_tags', 'depth_map', 'pose', 'intrinsic', "bboxes_3d_world_coords", 'masks', 'bboxes_2d', "pointclouds", "depth_scale"]
+        depends_on: scene_fusion_stage/depth_back_projection
+        output_dir:
+
