@@ -141,12 +141,32 @@ def flatten_annotations(data, keep_keys):
     new_data = []
     for idx, _ in tqdm.tqdm(data.iterrows(), total=len(data), desc="Flatten annotation"):
         example = data.iloc[idx].copy()
-        lengths = [len(example[key]) if key in example else 0 for key in keep_keys]
+        # Separate keys that exist (and are list-valued) from those that are
+        # missing or not iterable.  Missing keys are filled with None later.
+        present_keys = []
+        absent_keys = []
+        for key in keep_keys:
+            if key in example and isinstance(example[key], (list, tuple, np.ndarray)) and len(example[key]) > 0:
+                present_keys.append(key)
+            else:
+                absent_keys.append(key)
+
+        if not present_keys:
+            continue  # nothing to flatten for this row
+
+        lengths = [len(example[key]) for key in present_keys]
         if not all(length == lengths[0] for length in lengths):
-            raise ValueError("Inconsistent lengths found in keep_keys.")
+            raise ValueError(
+                f"Inconsistent lengths found in keep_keys (row {idx}): "
+                + ", ".join(f"{k}={l}" for k, l in zip(present_keys, lengths))
+            )
 
         for i in range(lengths[0]):
-            new_example = {key: example[key][i] if key in example else None for key in keep_keys}
+            new_example = {}
+            for key in present_keys:
+                new_example[key] = example[key][i]
+            for key in absent_keys:
+                new_example[key] = None
             new_example["image"] = example["image"]
             new_data.append(new_example)
     return pd.DataFrame(new_data)
