@@ -10,13 +10,14 @@
 #    [5] Preprocessed Parquet → QA annotation    (run.py annotation)
 #    [6] Result summary
 #
-#  Usage:
-#    ./run_embodiedscan_pipeline.sh                                    # all sources, all steps
-#    ./run_embodiedscan_pipeline.sh --source scannet                   # only ScanNet
-#    ./run_embodiedscan_pipeline.sh --source 3rscan,arkitscenes        # multiple sources
-#    ./run_embodiedscan_pipeline.sh --start-step 4                     # skip extraction
-#    ./run_embodiedscan_pipeline.sh --start-step 5 --multiview-only    # annotation only
-#    ./run_embodiedscan_pipeline.sh --tasks demo_mmsi_camera_camera    # specific tasks
+#  Usage (single source is REQUIRED):
+#    ./run_embodiedscan_pipeline.sh --source scannet                   # ScanNet end-to-end
+#    ./run_embodiedscan_pipeline.sh --source 3rscan --start-step 4     # skip extraction
+#    ./run_embodiedscan_pipeline.sh --source arkitscenes --multiview-only
+#    ./run_embodiedscan_pipeline.sh --source scannet --tasks demo_mmsi_camera_camera
+#
+#  All outputs are bucketed under  ${RUN_ROOT}/<source>/...  so different
+#  sources never collide on disk. Each invocation processes exactly one source.
 
 # EmbodiedScan 官方代码（必须）
 # OpenSpatial 的 extract.py 在 worker 初始化时直接 from embodiedscan.explorer import EmbodiedScanExplorer，这个类来自 EmbodiedScan 官方仓库，不是 OpenSpatial 自带的。
@@ -66,7 +67,7 @@ START_STEP=1
 MULTIVIEW_ONLY=false
 SINGLEVIEW_ONLY=false
 TASK_FILTER=""
-SOURCE="all"                  # scannet | 3rscan | matterport3d | arkitscenes | all
+SOURCE=""                     # REQUIRED: scannet | 3rscan | matterport3d | arkitscenes
 EXTRACT_WORKERS=24
 MAX_SCENES=""                 # empty = no limit
 MAX_TASKS=""                  # empty = no limit (hard-cap on total tasks for smoke test)
@@ -77,24 +78,24 @@ Usage: $0 [OPTIONS]
 
 Options:
   --start-step N        Start from step N (1-6, default: 1)
-  --source SRC          3D dataset source(s), comma-separated
-                        Choices: scannet, 3rscan, matterport3d, arkitscenes, all
-                        (default: all)
+  --source SRC          3D dataset source (REQUIRED, exactly one)
+                        Choices: scannet, 3rscan, matterport3d, arkitscenes
   --multiview-only      Only run multiview annotation tasks (step 5)
   --singleview-only     Only run singleview annotation tasks (step 5)
   --tasks TASK1,TASK2   Only run specified tasks (comma-separated, no .yaml)
   --workers N           Number of parallel workers for extraction (default: 24)
-  --max-scenes N        Limit number of scenes per source (for testing)
-  --max-tasks N         Hard-cap on total (scene, camera) tasks per source (for smoke testing)
+  --max-scenes N        Limit number of scenes (for testing)
+  --max-tasks N         Hard-cap on total (scene, camera) tasks (for smoke testing)
   -h, --help            Show this help message
 
+Outputs are written to ${RUN_ROOT}/<source>/... so different sources are
+fully isolated on disk. Each invocation processes exactly one source.
+
 Examples:
-  $0                                                  # full pipeline, all sources
-  $0 --source scannet                                 # only ScanNet source
-  $0 --source 3rscan,arkitscenes                      # two sources
-  $0 --start-step 4 --source scannet                  # skip extraction, preprocess
-  $0 --start-step 5 --multiview-only                  # annotation only
-  $0 --tasks demo_mmsi_camera_camera                  # one specific task
+  $0 --source scannet                                 # ScanNet end-to-end
+  $0 --source 3rscan --start-step 4                   # skip extraction
+  $0 --source arkitscenes --multiview-only            # annotation only
+  $0 --source scannet --tasks demo_mmsi_camera_camera # one specific task
   $0 --source scannet --max-scenes 10                 # smoke test with 10 scenes
 EOF
     exit 0
@@ -142,22 +143,25 @@ if [[ "$MULTIVIEW_ONLY" == true && "$SINGLEVIEW_ONLY" == true ]]; then
     err "--multiview-only and --singleview-only are mutually exclusive"; exit 1
 fi
 
-# Validate source names
+# Validate source name (exactly one required; no "all", no comma-list)
 ALL_SOURCES=("scannet" "3rscan" "matterport3d" "arkitscenes")
-if [[ "$SOURCE" == "all" ]]; then
-    SOURCES=("${ALL_SOURCES[@]}")
-else
-    IFS=',' read -ra SOURCES <<< "$SOURCE"
-    for s in "${SOURCES[@]}"; do
-        valid=false
-        for a in "${ALL_SOURCES[@]}"; do
-            [[ "$s" == "$a" ]] && valid=true
-        done
-        if [[ "$valid" == false ]]; then
-            err "Unknown source: $s. Valid: ${ALL_SOURCES[*]}"; exit 1
-        fi
-    done
+if [[ -z "$SOURCE" ]]; then
+    err "--source is required. Choose exactly one of: ${ALL_SOURCES[*]}"; exit 1
 fi
+if [[ "$SOURCE" == *,* ]]; then
+    err "--source only accepts a single dataset (got '${SOURCE}'). Run the script once per source."; exit 1
+fi
+if [[ "$SOURCE" == "all" ]]; then
+    err "--source=all is no longer supported. Run the script once per source."; exit 1
+fi
+valid=false
+for a in "${ALL_SOURCES[@]}"; do
+    [[ "$SOURCE" == "$a" ]] && valid=true
+done
+if [[ "$valid" == false ]]; then
+    err "Unknown source: ${SOURCE}. Valid: ${ALL_SOURCES[*]}"; exit 1
+fi
+SOURCES=("${SOURCE}")   # kept as array for downstream loops (always length 1)
 
 log "Config: start-step=${START_STEP}  source=${SOURCE}  multiview-only=${MULTIVIEW_ONLY}  singleview-only=${SINGLEVIEW_ONLY}  tasks=${TASK_FILTER:-all}"
 
@@ -165,19 +169,23 @@ log "Config: start-step=${START_STEP}  source=${SOURCE}  multiview-only=${MULTIV
 export PROJECT_ROOT="/apdcephfs_303747097/share_303747097/jingfanchen/code/OpenSpatial"
 export EMBODIEDSCAN_ROOT="/apdcephfs_303747097/share_303747097/jingfanchen/data/EmbodiedScan"       # <-- EmbodiedScan project root
 export EMBODIEDSCAN_DATA="${EMBODIEDSCAN_ROOT}/data"    # <-- contains scannet/, 3rscan/, etc.
+export EMBODIEDSCAN_PROJECT="/apdcephfs_303747097/share_303747097/jingfanchen/code/EmbodiedScan"
 export RUN_ROOT="${PROJECT_ROOT}/output/embodiedscan_run"
-export EXTRACT_OUT_DIR="${RUN_ROOT}/01_extract"
-export PARQUET_DIR="${RUN_ROOT}/02_parquet"
-export PIPELINE_OUT_DIR="${RUN_ROOT}/03_pipeline"
-export ANNOT_OUT_DIR="${RUN_ROOT}/04_annotation"
-export BLINK_OUT_DIR="${RUN_ROOT}/05_blink"
-export TMP_CFG_DIR="${RUN_ROOT}/_tmp_configs"
-export LOG_DIR="${RUN_ROOT}/logs"
+# All artefacts are bucketed under  ${RUN_ROOT}/<source>/...  so different
+# sources never collide on disk.
+export SOURCE_ROOT="${RUN_ROOT}/${SOURCE}"
+export EXTRACT_OUT_DIR="${SOURCE_ROOT}/01_extract"
+export PARQUET_DIR="${SOURCE_ROOT}/02_parquet"
+export PIPELINE_OUT_DIR="${SOURCE_ROOT}/03_pipeline"
+export ANNOT_OUT_DIR="${SOURCE_ROOT}/04_annotation"
+export BLINK_OUT_DIR="${SOURCE_ROOT}/05_blink"
+export TMP_CFG_DIR="${SOURCE_ROOT}/_tmp_configs"
+export LOG_DIR="${SOURCE_ROOT}/logs"
 
-export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+export PYTHONPATH="${PROJECT_ROOT}:${EMBODIEDSCAN_PROJECT}:${PYTHONPATH:-}"
 export EMBODIEDSCAN_PREPROC="${PROJECT_ROOT}/data_preprocessing/embodiedscan"
 
-mkdir -p "${EXTRACT_OUT_DIR}" "${PARQUET_DIR}" "${PIPELINE_OUT_DIR}" "${ANNOT_OUT_DIR}" "${BLINK_OUT_DIR}" "${TMP_CFG_DIR}" "${LOG_DIR}"
+mkdir -p "${SOURCE_ROOT}" "${EXTRACT_OUT_DIR}" "${PARQUET_DIR}" "${PIPELINE_OUT_DIR}" "${ANNOT_OUT_DIR}" "${BLINK_OUT_DIR}" "${TMP_CFG_DIR}" "${LOG_DIR}"
 cd "${PROJECT_ROOT}"
 
 # ==================== task definitions =======================================
@@ -583,5 +591,5 @@ if img_root.is_dir():
 PY
 fi
 
-ok "ALL DONE. Outputs under ${RUN_ROOT}"
+ok "ALL DONE. Outputs under ${SOURCE_ROOT}  (source=${SOURCE})"
 log "Next:  python visualize_server.py --data_dir ${BLINK_OUT_DIR} --port 8888"
