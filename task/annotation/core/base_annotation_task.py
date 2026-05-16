@@ -162,7 +162,11 @@ class BaseAnnotationTask(BaseTask):
         if random.random() < mark_prob:
             processed_image, marked = self.marker.mark_objects(image, nodes)
         else:
-            processed_image = {"bytes": convert_pil_to_bytes(image)}
+            raw = convert_pil_to_bytes(image)
+            # Keep the same schema as marker.mark_objects() so downstream
+            # writers can uniformly look for raw_bytes. Here the image was
+            # never annotated, so ``bytes`` and ``raw_bytes`` are identical.
+            processed_image = {"bytes": raw, "raw_bytes": raw}
             marked = [(n.tag, n) for n in nodes]
 
         if each:
@@ -251,6 +255,49 @@ class BaseAnnotationTask(BaseTask):
         """
         return create_singleview_messages(prompts)
 
+    @staticmethod
+    def _extract_raw_images(processed_images):
+        """Derive a parallel list of raw (un-annotated) images from processed_images.
+
+        ``processed_images`` is a per-QA container whose elements are either:
+          - singleview: a single image entry ({"bytes": ..., "raw_bytes": ...}
+            dict, PIL image, ndarray, ...)
+          - multiview:  a list/tuple of such entries (one per view).
+
+        This helper walks both layouts and returns an identically-shaped
+        structure where each entry is the *raw* counterpart:
+          - if the entry is a dict carrying ``raw_bytes``, emit
+            ``{"bytes": <raw_bytes>}`` (so downstream PIL-decoders behave
+            identically to the annotated copy);
+          - otherwise emit the original entry unchanged (it was never drawn
+            on, so raw == annotated).
+
+        The return value is safe to serialize as a DataFrame column (plain
+        list / dict / bytes / PIL).
+        """
+        def _one(entry):
+            if isinstance(entry, dict):
+                raw = entry.get("raw_bytes")
+                if raw is not None:
+                    return {"bytes": raw}
+                # No raw_bytes recorded: fall back to the annotated copy so
+                # downstream code doesn't crash. (Happens for legacy call
+                # sites that construct the dict without going through
+                # VisualMarker.mark_objects.)
+                b = entry.get("bytes")
+                return {"bytes": b} if b is not None else None
+            return entry
+
+        if processed_images is None:
+            return None
+        out = []
+        for qa_entry in processed_images:
+            if isinstance(qa_entry, (list, tuple)):
+                out.append([_one(v) for v in qa_entry])
+            else:
+                out.append(_one(qa_entry))
+        return out
+
     def apply_transform(self, example, idx=None):
         """Standard transform pipeline: check → build graph → process → create_messages → set fields.
 
@@ -296,6 +343,7 @@ class BaseAnnotationTask(BaseTask):
 
         example["messages"] = messages
         example["QA_images"] = processed_images
+        example["QA_images_raw"] = self._extract_raw_images(processed_images)
         example["question_tags"] = question_tags
         example["question_types"] = question_types
 
@@ -360,20 +408,36 @@ class BaseAnnotationTask(BaseTask):
                     cmap_internal, view_index_to_image_num=view_map)
             # Render using MindCube format (grid-cell canvas).
             render_target = cmap_mindcube if cmap_mindcube is not None else cmap_internal
+            cmap_img_basic = None
             if render_target is not None and self._cog_renderer is not None:
                 q_text, a_text = self._split_question_answer(prompt)
+                # Full version: QA + camera + object + task-specific reasoning
+                # overlay (A/B axes, dx/dz arrows, world/local reasoning text).
                 try:
-                    cmap_img = self._cog_renderer.render(render_target, q_text, a_text)
+                    cmap_img = self._cog_renderer.render(
+                        render_target, q_text, a_text,
+                        draw_reasoning_overlay=True)
                 except Exception:
                     cmap_img = None
+                # Basic version: QA + camera + object only (no reasoning
+                # overlay). Useful for training-data consumers that do NOT
+                # want the answer leaked via overlay arrows / reasoning text.
+                try:
+                    cmap_img_basic = self._cog_renderer.render(
+                        render_target, q_text, a_text,
+                        draw_reasoning_overlay=False)
+                except Exception:
+                    cmap_img_basic = None
                 with self._cog_dump_lock:
                     self._cog_total_count += 1
                     if cmap_img is None:
                         self._cog_fail_count += 1
-                if cmap_img is not None and self._cog_settings.dump_samples:
+                if self._cog_settings.dump_samples and (
+                        cmap_img is not None or cmap_img_basic is not None):
                     tag = question_tags[i][0] if (i < len(question_tags)
                                                   and question_tags[i]) else "tag"
-                    self._maybe_dump_sample(cmap_img, tag)
+                    self._maybe_dump_sample(cmap_img, tag,
+                                            basic_png_bytes=cmap_img_basic)
             maps.append(cmap_mindcube)
             images.append(cmap_img)
         example["cognitive_maps"] = maps
@@ -390,8 +454,17 @@ class BaseAnnotationTask(BaseTask):
             return q.strip(), a.strip()
         return prompt.strip(), ""
 
-    def _maybe_dump_sample(self, png_bytes, tag):
-        """Dump the first N PNGs to disk for quick inspection (best-effort)."""
+    def _maybe_dump_sample(self, png_bytes, tag, basic_png_bytes=None):
+        """Dump the first N PNGs to disk for quick inspection (best-effort).
+
+        Always writes the "full" version (QA + camera + object + reasoning
+        overlay) as ``<idx>_<tag>.png``. When ``basic_png_bytes`` is given
+        (QA + camera + object only, no reasoning overlay), additionally
+        writes ``<idx>_<tag>_basic.png`` so callers can compare side-by-side.
+
+        The per-sample counter advances once per QA, i.e. the full and basic
+        files for the same QA share the same index prefix.
+        """
         with self._cog_dump_lock:
             if self._cog_dump_counter >= self._cog_settings.dump_sample_count:
                 return
@@ -405,9 +478,15 @@ class BaseAnnotationTask(BaseTask):
             os.makedirs(out_dir, exist_ok=True)
             safe_tag = "".join(c if c.isalnum() or c in "_-" else "_"
                                for c in str(tag))
-            out_path = os.path.join(out_dir, f"{idx:04d}_{safe_tag}.png")
-            with open(out_path, "wb") as f:
-                f.write(png_bytes)
+            if png_bytes is not None:
+                out_path = os.path.join(out_dir, f"{idx:04d}_{safe_tag}.png")
+                with open(out_path, "wb") as f:
+                    f.write(png_bytes)
+            if basic_png_bytes is not None:
+                out_path_basic = os.path.join(
+                    out_dir, f"{idx:04d}_{safe_tag}_basic.png")
+                with open(out_path_basic, "wb") as f:
+                    f.write(basic_png_bytes)
         except Exception:
             # Sample dumping is best-effort; never break the pipeline.
             pass

@@ -57,12 +57,35 @@ mmsi_camera_object_questions = [
 ]
 mmsi_camera_object_answers = ["[X]"]
 
+# ─── MMSI Camera–Facing-Object–Camera ─────────────────────────────────
+# Variant where the reference "forward" is NOT image 1's optical axis
+# but the 2D horizontal vector pointing from Camera A toward a specified
+# visible object. The object is required to be visible in image 1.
+mmsi_camera_facing_object_camera_questions = [
+    "Standing at the camera that took image 1 and facing the [A], in "
+    "which direction is the camera that took image 2? [Y]",
+]
+mmsi_camera_facing_object_camera_answers = ["[X]"]
+
 # ─── MMSI Object–Object ───────────────────────────────────────────────
 mmsi_object_object_questions = [
     "Considering both images, is the [A] to the left or right of the [B] in "
     "the world frame defined by the line connecting the two cameras? [Y]",
 ]
 mmsi_object_object_answers = ["[X]"]
+
+# ─── MMSI Object–Facing-Object–Object ─────────────────────────────────
+# Purely object-anchored variant of camera_facing_object_camera: the
+# reference point is an anchor OBJECT (not a camera), and forward is the
+# 2D horizontal vector from the anchor object toward an orienting
+# object. The question asks where a third (query) object sits in that
+# local frame, binned into eight 45°-wide octants. All three distinct
+# objects must be visible in the same image.
+mmsi_object_facing_object_object_questions = [
+    "If I stand at the [A] and face the [B], in which direction is the "
+    "[C]? [Y]",
+]
+mmsi_object_facing_object_object_answers = ["[X]"]
 
 # ─── MMSI Camera Motion (composite) ───────────────────────────────────
 mmsi_camera_motion_questions = [
@@ -110,9 +133,17 @@ TemplateRegistry.register("mmsi.camera_object", PromptTemplate(
     questions=mmsi_camera_object_questions,
     answers=mmsi_camera_object_answers,
 ))
+TemplateRegistry.register("mmsi.camera_facing_object_camera", PromptTemplate(
+    questions=mmsi_camera_facing_object_camera_questions,
+    answers=mmsi_camera_facing_object_camera_answers,
+))
 TemplateRegistry.register("mmsi.object_object", PromptTemplate(
     questions=mmsi_object_object_questions,
     answers=mmsi_object_object_answers,
+))
+TemplateRegistry.register("mmsi.object_facing_object_object", PromptTemplate(
+    questions=mmsi_object_facing_object_object_questions,
+    answers=mmsi_object_facing_object_object_answers,
 ))
 TemplateRegistry.register("mmsi.camera_motion", PromptTemplate(
     questions=mmsi_camera_motion_questions,

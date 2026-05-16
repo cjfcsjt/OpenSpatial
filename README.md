@@ -77,7 +77,9 @@ The following benchmark-style multiview tasks are available out of the box
 | Camera Movement Direction | VSI-Bench | `demo_multiview_camera_movement.yaml` |
 | Camera–Camera | MMSI-Bench | `demo_mmsi_camera_camera.yaml` |
 | Camera–Object | MMSI-Bench | `demo_mmsi_camera_object.yaml` |
+| Camera–FacingObject–Camera | MMSI-Bench (extended) | `demo_mmsi_camera_facing_object_camera.yaml` |
 | Object–Object (world-frame) | MMSI-Bench | `demo_mmsi_object_object.yaml` |
+| Object–FacingObject–Object | MMSI-Bench (extended) | `demo_mmsi_object_facing_object_object.yaml` |
 | Camera Motion (composite) | MMSI-Bench | `demo_mmsi_camera_motion.yaml` |
 | BEV Pose Estimation | all-angles | `demo_multiview_bev_pose_estimation.yaml` |
 | Manipulation Viewpoint | all-angles (approx.) | `demo_multiview_manipulation_view.yaml` |

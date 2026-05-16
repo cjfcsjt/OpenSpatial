@@ -1,0 +1,72 @@
+dataset:
+  modality: image
+  dataset_name: image_base
+  data_dir: /path/to/multiview_processed.parquet
+
+pipeline:
+  file_name: base_pipeline
+  class_name: BasePipeline
+
+  stages:
+    annotation_stage:
+      -
+        file_name: mmsi_camera_facing_object_camera
+        method: AnnotationGenerator
+        scaling_factor: 1
+        filter_tags: ["ceiling", "floor", "wall", "object"]
+        sub_tasks:
+          # "Standing at the camera that took image 1 and facing the
+          # {object}, in which direction is the camera that took image 2?"
+          # 8-option MCQ; object must be visible in image 1.
+          camera_facing_object_camera_mcq: 5
+        max_num_views: 400
+
+        # ─── Camera-pair pose-diversity (same semantics as cam-cam) ─────
+        # Generic 3D pose-diversity threshold on (v_a, v_b), OR-combined:
+        #   accept if rotation >= min_rot_angle OR translation >= min_translation.
+        min_rot_angle: 15.0
+        min_translation: 0.5
+        # Horizontal-plane translation hard floor (AND, 2D).
+        min_horizontal_translation: 0.3
+        # Vertical translation hard ceiling (AND, 1D). Keeps both cameras
+        # roughly co-planar so the viewer's direction intuition is not
+        # disrupted by large height gaps.
+        max_vertical_translation: 0.3
+
+        # ─── Object-level filters ───────────────────────────────────────
+        # Minimum horizontal distance from Camera A to the target object.
+        # Sub-decimeter distances produce unstable virtual "facing"
+        # vectors dominated by pose noise. Set to 0 to disable.
+        min_object_horizontal_distance: 0.3
+        # Minimum angular deviation (in degrees) between the virtual
+        # heading (A → object) and A's real camera forward (projected on
+        # world-xy). If the target sits almost on A's optical axis, the
+        # virtual frame collapses onto A's real frame and the task
+        # reduces to plain camera-camera, losing its "reorient to face
+        # X" value. A 20° floor keeps a meaningful reorientation step.
+        # Set to 0 to disable.
+        min_facing_deviation_deg: 20.0
+
+        # ─── Answer-level filter ───────────────────────────────────────
+        # Octant-boundary margin (8-way): reject the triple if B's
+        # bearing in A's facing-the-object local frame lies within
+        # `boundary_margin_deg` of an octant boundary (22.5° / 67.5° /
+        # 112.5° / 157.5° …). Default 5° leaves a 35° safe inner zone
+        # per 45° octant. Set to 0 to disable.
+        boundary_margin_deg: 5.0
+
+        use_multi_processing: false
+        num_workers: 8
+        output_dir:
+        cognitive_map:
+          # The BEV shows both cameras, the target object (green star),
+          # and the 8-sector wedge anchored at Camera A but rotated to
+          # the *virtual* "facing the object" heading (A→object on
+          # world-xy). A dashed green line from A to the object marks
+          # that heading; the "+Z (face→obj)" purple arrow points the
+          # same way. The answer sector matches B's actual BEV position
+          # by construction.
+          enable: true
+          enable_visualization: true
+          dump_samples: true
+          dump_sample_count: 20

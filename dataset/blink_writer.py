@@ -297,6 +297,12 @@ class BlinkWriter:
             raw_qa_images = row.get("QA_images")
             qa_images = _normalize_qa_images(raw_qa_images,
                                              num_prompts=len(qa_pairs))
+            # Parallel un-annotated copies (may be None if task didn't
+            # populate it); normalized into the same [[PIL]*V]*Q shape
+            # as ``qa_images`` so the per-view save loop can zip them.
+            raw_qa_images_field = row.get("QA_images_raw")
+            qa_images_raw = _normalize_qa_images(raw_qa_images_field,
+                                                 num_prompts=len(qa_pairs))
             tags_field = row.get("question_tags")
             types_field = row.get("question_types")
             cogs_field = row.get("cognitive_maps")
@@ -325,6 +331,8 @@ class BlinkWriter:
 
                 # Dump images for this QA.
                 pil_views = qa_images[qa_idx]
+                pil_views_raw = (qa_images_raw[qa_idx]
+                                 if qa_idx < len(qa_images_raw) else [])
                 rel_paths = []
                 if not pil_views:
                     stats["image_errors"] += 1
@@ -361,6 +369,29 @@ class BlinkWriter:
                         continue
                     rel_paths.append(
                         os.path.join("images", task_name, filename))
+
+                    # Parallel un-annotated copy (best-effort; never fails
+                    # the pipeline). Written next to the annotated file as
+                    # ``<idx>_view<k>_raw.png`` and NOT listed in jsonl's
+                    # ``image`` field, so model input is unchanged.
+                    pil_raw = (pil_views_raw[view_idx]
+                               if view_idx < len(pil_views_raw) else None)
+                    if pil_raw is not None:
+                        raw_to_save = pil_raw
+                        if needs_rotate_cw90:
+                            try:
+                                raw_to_save = pil_raw.transpose(
+                                    PILImage.ROTATE_270)
+                            except Exception:
+                                raw_to_save = pil_raw
+                        raw_filename = f"{flat_idx:06d}_view{view_idx}_raw.png"
+                        raw_abs_path = os.path.join(images_dir, raw_filename)
+                        try:
+                            raw_to_save.save(raw_abs_path, format="PNG")
+                        except Exception as exc:
+                            print(f"  [blink] {task_name} row={row_idx} "
+                                  f"qa={qa_idx} view={view_idx}: raw image "
+                                  f"save failed ({exc})")
 
                 conversations = _strip_image_tags(msg_pair)
                 output_type = _infer_output_type(conversations)

@@ -164,7 +164,8 @@ class BasePipeline:
         formats = self._resolve_annotation_formats(task_cfg)
         batch_size = getattr(task_cfg, "save_batch_size", 1000)
         keep_cols = getattr(task_cfg, "keep_data_columns",
-                           ["messages", "QA_images", "question_tags", "question_types",
+                           ["messages", "QA_images", "QA_images_raw",
+                            "question_tags", "question_types",
                             "cognitive_maps"])
 
         # DataFrame overview -- highly useful when converted=0/0.
