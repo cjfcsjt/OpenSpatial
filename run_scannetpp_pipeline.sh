@@ -150,7 +150,9 @@ MULTIVIEW_TASKS=(
     demo_mmsi_camera_camera
     demo_mmsi_camera_motion
     demo_mmsi_camera_object
+    demo_mmsi_camera_facing_object_camera
     demo_mmsi_object_object
+    demo_mmsi_object_facing_object_object
 )
 
 # ==================== task filter helper =====================================

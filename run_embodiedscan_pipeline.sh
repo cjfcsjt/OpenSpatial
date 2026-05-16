@@ -215,8 +215,8 @@ SINGLEVIEW_TASKS=(
 # │ 12. mmsi_camera_motion                  │ MCQ(4)   │ 2      │ 复合运动分类(平移+旋转组合)         │
 # │ 13. mmsi_camera_object                  │ MCQ(4)   │ 2      │ 物体在Camera A坐标系的哪个方向      │
 # │ 14. mmsi_object_object                  │ MCQ(3)   │ 2      │ 物体A在物体B的左/右/同线           │
-# └─────────────────────────────────────────┴──────────┴────────┴──────────────────────────────────┘
-
+# │ 15. mmsi_object_facing_object_object    │ MCQ(8)   │ 1      │ 站在A朝向B，C在哪个方向(8方位)  │
+# └──────────────────────────────────────────┘──────────┼────────┼──────────────────────────────────┘
 # OE = Open-Ended    MCQ = Multiple Choice Question    MCQ(N) = N个选项的选择题
 
 # 帧采样分为两层：
@@ -246,8 +246,8 @@ SINGLEVIEW_TASKS=(
 # │ mmsi_camera_motion               │ 2    │ 完全随机 random.sample (无任何过滤)                     │ ❌ 故意不要求          │
 # │ mmsi_camera_object               │ 2    │ 随机+物体约束 (物体不在View A可见)                      │ ✅ 同上               │
 # │ mmsi_object_object               │ 2    │ 随机两视角+随机两物体                                   │ ✅ 同上               │
-# └──────────────────────────────────┴──────┴──────────────────────────────────────────────────────┴──────────────────────┘
-
+# │ mmsi_object_facing_object_object │ 1    │ 单视角下枚举三物体(anchor/orienting/query)三元组       │ ❌ 单视角无需         │
+# └──────────────────────────────────┴──────┴──────────────────────────────────────────────────────┴─────────────────────┘
 MULTIVIEW_TASKS=(
     demo_multiview_distance
     demo_multiview_distance_obj_cam
@@ -260,7 +260,9 @@ MULTIVIEW_TASKS=(
     demo_mmsi_camera_camera
     demo_mmsi_camera_motion
     demo_mmsi_camera_object
+    demo_mmsi_camera_facing_object_camera
     demo_mmsi_object_object
+    demo_mmsi_object_facing_object_object
 )
 
 # ==================== task filter helper =====================================

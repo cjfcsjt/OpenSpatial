@@ -307,12 +307,20 @@ class VisualMarker:
             Object mode: marked_info = [(tag_with_color, passthrough), ...]
             Point mode:  marked_info = color_name (str)
         """
+        # Capture the un-annotated source image *once*, before any drawing,
+        # so downstream writers can dump a parallel ``_raw.png`` alongside
+        # the annotated output. This is cheap (one PNG encode per call) and
+        # never touches pixels that are later drawn on.
+        raw_bytes = convert_pil_to_bytes(image)
+
         # ── Point mode: explicit UV coordinates, single color ──
         if points is not None:
             color_name, color = self.pop_color()
             colors = [[color_name, color]] * len(points)
             overlay = draw_points_on_image(image, points, colors, labels=labels)
-            return {"bytes": convert_pil_to_bytes(Image.fromarray(overlay))}, color_name
+            return ({"bytes": convert_pil_to_bytes(Image.fromarray(overlay)),
+                     "raw_bytes": raw_bytes},
+                    color_name)
 
         # ── Object mode: extract positions from masks/boxes ──
         if mark_type is None:
@@ -350,4 +358,6 @@ class VisualMarker:
         else:
             overlay = draw_boxes_on_image(image, geometries, colors_to_draw, labels=labels)
 
-        return {"bytes": convert_pil_to_bytes(Image.fromarray(overlay))}, marked_objs
+        return ({"bytes": convert_pil_to_bytes(Image.fromarray(overlay)),
+                 "raw_bytes": raw_bytes},
+                marked_objs)

@@ -1,0 +1,73 @@
+dataset:
+  modality: image
+  dataset_name: image_base
+  data_dir: /path/to/multiview_processed.parquet
+
+pipeline:
+  file_name: base_pipeline
+  class_name: BasePipeline
+
+  stages:
+    annotation_stage:
+      -
+        file_name: mmsi_object_facing_object_object
+        method: AnnotationGenerator
+        scaling_factor: 1
+        filter_tags: ["ceiling", "floor", "wall", "object"]
+        sub_tasks:
+          # "In image 1 you can see the {anchor}. In image 2 you can see
+          # the {orienting}. In image 3 you can see the {query}. If I
+          # stand at the {anchor} and face the {orienting}, in which
+          # direction is the {query}?" — 8-option MCQ.
+          #
+          # Multi-view variant: each of the three objects is visible in
+          # ONE image only (exclusive visibility across v_a / v_o / v_q).
+          # Images are passed in the order (anchor_view, orienting_view,
+          # query_view) so they correspond 1-to-1 to "image 1/2/3" in
+          # the prompt text.
+          object_facing_object_object_mcq: 5
+        max_num_views: 400
+
+        # ─── Pose-diversity floors (for the three selected views) ──────
+        # Applied pairwise between v_a / v_o / v_q using the standard
+        # OR-combined rule (rotation ≥ min_rot_angle  OR  translation ≥
+        # min_translation). Set min_translation to 0 to disable the
+        # translation side of the check (rotation-only).
+        min_rot_angle: 15.0
+        min_translation: 0.0
+
+        # ─── Object-level geometry floors ──────────────────────────────
+        # Minimum horizontal distance (world-xy) from the anchor object
+        # to the orienting object. Below this the facing vector becomes
+        # numerically unstable. Set to 0 to disable.
+        min_anchor_to_orienting_distance: 0.3
+        # Minimum horizontal distance from the anchor object to the
+        # query object — tiny offsets are dominated by 3D-box noise and
+        # produce ill-defined directions. Set to 0 to disable.
+        min_anchor_to_query_distance: 0.3
+        # Minimum horizontal distance between the orienting and query
+        # objects — keeps the query role genuinely distinct from "the
+        # thing I'm facing". Set to 0 to disable.
+        min_orienting_to_query_distance: 0.1
+
+        # ─── Answer-level filter ───────────────────────────────────────
+        # Octant-boundary margin (8-way): reject quadruples whose
+        # bearing in the (anchor, facing-orienting) local frame lies
+        # within ``boundary_margin_deg`` of an octant boundary (22.5° /
+        # 67.5° / 112.5° / 157.5° …). Default 5° leaves a 35° safe zone
+        # per 45° octant. Set to 0 to disable.
+        boundary_margin_deg: 5.0
+
+        use_multi_processing: false
+        num_workers: 8
+        output_dir:
+        cognitive_map:
+          # BEV shows the three chosen views' cameras plus all three
+          # object roles (anchor / orienting / query). The reasoning
+          # overlay for this task kind is not drawn by the default
+          # renderer — it is carried in the cog_ctx for downstream
+          # audits and for a future dedicated renderer.
+          enable: true
+          enable_visualization: true
+          dump_samples: true
+          dump_sample_count: 20
