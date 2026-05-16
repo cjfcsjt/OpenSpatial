@@ -22,6 +22,7 @@ pipeline:
         dis_pot_thre: 0.08
         use_multi_processing: false
         num_workers: 8
+        save_batch_size: 100
         output_dir:
         cognitive_map:
           enable: true

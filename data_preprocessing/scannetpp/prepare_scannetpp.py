@@ -158,6 +158,14 @@ def process_single_scene(
         if not rgb_files:
             return _skipped("No RGB keyframes (*0.jpg)")
 
+        # Get RGB resolution from the first frame
+        rgb_sample = cv2.imread(rgb_files[0])
+        rgb_h, rgb_w = rgb_sample.shape[:2]
+
+        # Directory for resized depth maps
+        depth_resized_dir = os.path.join(base_sensor_path, "depth_resized")
+        os.makedirs(depth_resized_dir, exist_ok=True)
+
         ids, images, poses, intrinsics, depth_maps = [], [], [], [], []
         skipped_frames = 0
         for rgb_file in rgb_files:
@@ -185,7 +193,15 @@ def process_single_scene(
 
             ids.append(frame_idx_str)
             images.append(abs_rgb_path)
-            depth_maps.append(os.path.abspath(expected_depth))
+            resized_depth_path = os.path.join(depth_resized_dir, f"{frame_name}.png")
+            if not os.path.exists(resized_depth_path):
+                depth_raw = cv2.imread(expected_depth, cv2.IMREAD_UNCHANGED)
+                if depth_raw.shape[:2] != (rgb_h, rgb_w):
+                    depth_resized = cv2.resize(depth_raw, (rgb_w, rgb_h), interpolation=cv2.INTER_NEAREST)
+                else:
+                    depth_resized = depth_raw
+                cv2.imwrite(resized_depth_path, depth_resized)
+            depth_maps.append(os.path.abspath(resized_depth_path))
             poses.append(json_to_4x4_txt(expected_pose))
             intrinsics.append(json_to_4x4_txt(expected_intr))
 

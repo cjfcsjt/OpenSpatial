@@ -26,6 +26,7 @@ pipeline:
         min_distractor_dist: 20
         use_multi_processing: false
         num_workers: 8
+        save_batch_size: 100
         output_dir:
         cognitive_map:
           enable: true
