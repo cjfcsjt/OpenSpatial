@@ -1,0 +1,95 @@
+import os
+from typing import List, Optional
+
+import numpy as np
+
+from embodiedscan_data.datasets import register
+from embodiedscan_data.datasets.base import DatasetConfig
+
+
+@register
+class ARKitScenesConfig(DatasetConfig):
+    name = "arkitscenes"
+    dataset_key = "arkitscenes"
+    depth_scale = 1000
+    ann_files = [
+        "embodiedscan-v2/embodiedscan_infos_train.pkl",
+        "embodiedscan-v2/embodiedscan_infos_val.pkl",
+        "embodiedscan-v2/embodiedscan_infos_test.pkl",
+    ]
+
+    def list_scenes(self, data_root: str) -> List[str]:
+        arkit_dir = os.path.join(data_root, "arkitscenes")
+        if not os.path.isdir(arkit_dir):
+            return []
+        scenes = []
+        for d in sorted(os.listdir(arkit_dir)):
+            if os.path.isdir(os.path.join(arkit_dir, d)):
+                scenes.append(f"arkitscenes/{d}")
+        return scenes
+
+    def list_cameras(self, data_root: str, scene: str) -> List[str]:
+        scene_name = scene.split("/")[-1]
+        frames_dir = os.path.join(
+            data_root, "arkitscenes", scene_name, f"{scene_name}_frames", "lowres_wide"
+        )
+        if not os.path.isdir(frames_dir):
+            return []
+        cameras = sorted(
+            ".".join(f.split(".")[:-1])
+            for f in os.listdir(frames_dir)
+            if f.endswith(".jpg") or f.endswith(".png")
+        )
+        return cameras
+
+    def get_scene_id(self, scene: str) -> str:
+        return scene.split("/")[-1]
+
+    def get_intrinsic(self, data_root: str, scene: str, camera: str) -> str:
+        scene_name = scene.split("/")[-1]
+        pincam_path = os.path.join(
+            data_root, "arkitscenes", scene_name,
+            f"{scene_name}_frames", "lowres_wide_intrinsics",
+            f"{camera}.pincam"
+        )
+        output_path = pincam_path.replace(".pincam", "_matrix.txt")
+        if not os.path.exists(output_path):
+            self._parse_pincam(pincam_path, output_path)
+        return os.path.relpath(output_path, data_root)
+
+    def _parse_pincam(self, pincam_path: str, output_path: str) -> None:
+        with open(pincam_path, "r") as f:
+            content = f.read()
+        values = [float(x) for x in content.split()]
+        fx, fy, cx, cy = values[2], values[3], values[4], values[5]
+        matrix = np.array([
+            [fx, 0, cx, 0],
+            [0, fy, cy, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+        ])
+        with open(output_path, "w") as f:
+            for row in matrix:
+                f.write(" ".join(f"{v:.6f}" for v in row) + "\n")
+
+    def get_depth_map(self, data_root: str, scene: str, camera: str) -> Optional[str]:
+        scene_name = scene.split("/")[-1]
+        return os.path.join(
+            "arkitscenes", scene_name,
+            f"{scene_name}_frames", "lowres_depth",
+            f"{camera}.png"
+        )
+
+    def skip_scene(self, data_root: str, scene: str) -> bool:
+        scene_name = scene.split("/")[-1]
+        frames_dir = os.path.join(
+            data_root, "arkitscenes", scene_name, f"{scene_name}_frames", "lowres_wide"
+        )
+        return not os.path.isdir(frames_dir)
+
+    def get_save_path(self, data_root: str, scene: str) -> str:
+        scene_name = scene.split("/")[-1]
+        return os.path.join(
+            data_root, "arkitscenes", scene_name,
+            f"{scene_name}_frames", "lowres_wide"
+        )
